@@ -1730,6 +1730,192 @@ Respond with only the category.
 
 ---
 
+## 12. Webhook Event Flow & Agent Routing
+
+### Webhook Handler Pattern (Core 80%)
+
+All webhook endpoints follow this pattern:
+
+```python
+# src/integrations/{source}/webhooks.py
+
+@router.post("/webhooks/{source_type}")
+async def webhook_handler(request: Request):
+    """
+    Core webhook handler (80% - common for all sources).
+    Extensible via pluggable auth, parsers, transformers, RBAC rules.
+    """
+    
+    # 1. VERIFY (extension: auth handler)
+    auth_handler = get_auth_handler(source_type)
+    if not await auth_handler.verify_signature(request):
+        return {"error": "Unauthorized"}, 401
+    
+    # 2. PARSE (extension: payload parser)
+    payload = await request.json()
+    parser = get_payload_parser(source_type)
+    event_data = parser.extract_event(payload)
+    
+    # 3. CLASSIFY URGENCY
+    priority = classify_priority(source_type, event_data)
+    # priority: "critical" (real-time) or "normal/low" (batched)
+    
+    # 4. TRANSFORM (extension: field transformer)
+    transformer = get_field_transformer(source_type)
+    normalized_data = transformer.transform(event_data)
+    
+    # 5. APPLY RBAC (extension: RBAC rule engine)
+    rbac_engine = get_rbac_engine(source_type)
+    rbac_tags = await rbac_engine.tag_event(normalized_data)
+    
+    # 6. CHECK DUPLICATE (idempotency)
+    content_hash = sha256(json.dumps(normalized_data).encode()).hexdigest()
+    if await duplicate_checker.exists(content_hash):
+        return {"status": "duplicate", "hash": content_hash}
+    
+    # 7. QUEUE FOR PROCESSING
+    if priority == "critical":
+        # Real-time: process immediately
+        await process_webhook_event_immediate(source_type, normalized_data, rbac_tags)
+    else:
+        # Batched: add to queue
+        await webhook_queue.add(source_type, normalized_data, rbac_tags, priority)
+    
+    return {"status": "queued", "priority": priority}
+```
+
+### Extension Points (20% Customization)
+
+Each source can override these handlers for custom behavior:
+
+```python
+# src/integrations/{source}/extensions.py
+# These are configured per-org via YAML + database overrides
+
+class CustomAuthHandler(BaseAuthHandler):
+    """Verify webhook signature (org-specific auth method)."""
+    async def verify_signature(self, request):
+        # Override for custom OAuth, API key schemes, etc.
+        pass
+
+class CustomPayloadParser(BasePayloadParser):
+    """Extract event data from payload (handles custom webhook formats)."""
+    def extract_event(self, payload):
+        # Override for non-standard payload structures
+        pass
+
+class CustomFieldTransformer(BaseFieldTransformer):
+    """Map source fields to RawDocument fields (org-specific field mapping)."""
+    def transform(self, event_data):
+        # E.g., map org's custom Jira fields to standard ones
+        pass
+
+class CustomRBACEngine(BaseRBACEngine):
+    """Tag event with RBAC rules (org-specific team structure)."""
+    async def tag_event(self, event_data):
+        # E.g., route to specific team based on custom rules
+        pass
+```
+
+### Webhook → Agent Routing
+
+After queuing, Celery task routes to appropriate agent:
+
+```python
+# src/tasks/webhook_tasks.py
+
+@app.task(bind=True, max_retries=3)
+async def process_webhook_event(self, source_type: str, event_data: dict, rbac_tags: dict):
+    """
+    Route webhook event to the right Source Agent.
+    Agent updates knowledge index and feeds into query-time retrieval.
+    """
+    
+    # Get source agent (Slack Agent, GitHub Agent, etc.)
+    agent_name = f"{source_type}_agent"
+    agent = get_agent(agent_name)
+    
+    # Convert to RawDocument
+    doc = RawDocument(
+        uri=event_data['unique_id'],
+        source_type=source_type,
+        title=event_data['title'],
+        content=event_data['content'],
+        content_hash=sha256(json.dumps(event_data).encode()).hexdigest(),
+        created_at=event_data['created_at'],
+        updated_at=datetime.now(),
+        author_ids=event_data['author_ids'],
+        space_id=rbac_tags['space_id'],
+        tags=event_data['tags'],
+        priority=rbac_tags['priority'],
+        ttl_seconds=rbac_tags.get('ttl_seconds'),
+        raw_metadata=event_data
+    )
+    
+    # Invoke Source Agent (LangGraph node)
+    result = await agent.invoke({
+        "document": doc,
+        "rbac_tags": rbac_tags,
+        "instruction": "ingest_and_index"
+    })
+    
+    # Log result
+    if result['status'] == 'success':
+        logger.info(f"Webhook {source_type} ingested: {doc.uri}")
+    else:
+        logger.error(f"Webhook {source_type} failed: {result['error']}")
+        raise self.retry(exc=Exception(result['error']), countdown=60)
+```
+
+### Configuration (YAML + Database)
+
+```yaml
+# config/webhooks.yaml
+# Defines auth handlers, parsers, transformers, RBAC rules per source
+
+webhooks:
+  slack:
+    auth_handler: slack_sig_verification  # Built-in or custom
+    payload_parser: slack_events_api       # Built-in or custom
+    field_transformer: slack_to_rawdoc     # Built-in or custom
+    rbac_engine: slack_channel_rbac        # Built-in or custom
+    priority:
+      "message": "normal"
+      "app_mention": "high"
+      "reaction_added": "low"
+    ttl_seconds: 2592000  # 30 days
+    enabled: true
+  
+  github:
+    auth_handler: github_hmac_sha256
+    payload_parser: github_webhooks_api
+    field_transformer: github_to_rawdoc
+    rbac_engine: github_repo_team_rbac
+    priority:
+      "push": "high"
+      "pull_request": "high"
+      "release": "critical"
+      "issues": "normal"
+    ttl_seconds: null  # Keep indefinitely
+    enabled: true
+  
+  jira:
+    auth_handler: custom_jira_oauth  # Org-specific: uses their Jira instance
+    payload_parser: jira_webhooks_api
+    field_transformer: jira_custom_fields  # Org-specific: custom field mapping
+    rbac_engine: jira_project_rbac
+    priority:
+      "issue_created": "high"
+      "issue_updated": "normal"
+    enabled: true
+
+# Database overrides per org (allows customization without forking)
+# Stored in PostgreSQL: webhooks_config table
+# Example: "slack.field_transformer" → points to custom handler in their deployment
+```
+
+---
+
 ## Summary: Integration Priorities & Roadmap
 
 | Phase | Sources | Key Features |

@@ -141,17 +141,92 @@ Multi-agent orchestration via **LangGraph** implements the **ReAct (Reasoning + 
 
 ### Agent Roster
 
+#### Ingestion & Real-Time Data Flow Agents
+
 | Agent | Single Responsibility | Interfaces With |
 |---|---|---|
-| **Orchestrator** | Classify query type, route to correct specialist agent(s), merge results | All agents, query classifier, routing graph |
-| **Doc Search Agent** | Semantic + keyword retrieval from T1 Hybrid RAG | Qdrant, page index, BM25, BGE-reranker |
+| **Webhook Router Agent** | Receive webhook events, classify urgency, route to source agents or queue for batch | Redis queue, webhook signature verifiers, priority dispatcher |
+| **Slack Source Agent** | Consume Slack webhook events, extract decisions/context, apply transformers | Slack API, field transformers, RBAC rules, Slack-specific parser |
+| **GitHub Source Agent** | Consume GitHub webhooks (push, PR, release), extract architecture/breaking changes | GitHub API, AST diff tools, Dependency Tracker input |
+| **Jira Source Agent** | Consume Jira webhooks (issue create/update), extract problem statements | Jira API, custom field transformers, RBAC rules |
+| **Log/Metric Source Agent** | Consume log/metric webhook or polling events, classify severity, route to appropriate handler | Sentry/Datadog APIs, severity classifiers, TTL managers |
+
+#### Query-Time Retrieval & Synthesis Agents
+
+| Agent | Single Responsibility | Interfaces With |
+|---|---|---|
+| **Orchestrator** | Classify user query type, route to correct specialist agent(s), merge results | All agents, query classifier, routing graph, source agent selector |
+| **Doc Search Agent** | Semantic + keyword retrieval from T1 Hybrid RAG (indexed documents from all sources) | Qdrant, page index, BM25, BGE-reranker, RBAC filter |
 | **Live Doc Agent** | Fetch, parse, temporarily index external URLs and open-source docs | Firecrawl, Tavily, ephemeral chunk store |
 | **Jira Ticket Agent** | Query Jira issues, support history, prior resolutions | Jira API, vector index of ticket embeddings |
+| **Slack Context Agent** | Retrieve relevant Slack conversations and team decisions | Slack API with historical search, message embeddings |
+| **Error Trace Agent** | Retrieve related error traces, stack traces, resolution history | Error trace index, APM APIs, related errors graph |
 | **Summariser Agent** | Produce structured document summaries with clause-preservation | Doc Search Agent output, page index, LLM |
 | **Analytics Agent** | Translate NL analytics queries into structured log queries | Query log DB, interaction event store, NL-to-SQL |
 | **Generator Agent** | Synthesise cited answer from compressed context chunks | Context compression output, LLM, citation builder |
 | **Critic Agent** | Evaluate Generator output for grounding, hallucinations, citation completeness | Generator output, retrieved chunks, validation schema |
 | **Proactive Agent** | Emit proactive alerts based on Dependency Tracker and gap signals | Dependency Tracker, gap signal DB, notification layer |
+
+### Data Ingestion Pipeline (Webhook → Agent → Storage)
+
+All external data flows through a unified **tiered ingestion pipeline**:
+
+```
+Critical Data Sources (Real-time)           Routine Data Sources (Batched)
+├─ Error traces (Sentry/APM)               ├─ Server logs (5 min batch)
+├─ Production alerts (logs with ERROR)     ├─ Performance metrics (15 min batch)
+├─ Slack decisions & context               ├─ Business data syncs (60 min batch)
+└─ GitHub breaking changes                 └─ Notion/Confluence incremental (30-60 min)
+    │                                           │
+    ▼                                           ▼
+Redis Queue (priority:high)            Redis Queue (priority:normal/low)
+    │                                           │
+    └───────────────┬──────────────────────────┘
+                    │
+                    ▼
+        Celery Task (Priority Dispatcher)
+                    │
+     ┌──────────────┼──────────────────┐
+     │              │                  │
+     ▼              ▼                  ▼
+  Extract    Apply Extensions    Route by Config
+     │       (auth, parsers,      (source → agent)
+     │        transformers,
+     │        RBAC rules)
+     │              │
+     └──────────────┼──────────────────┘
+                    │
+                    ▼
+        Source-Specific Agent
+        (Slack Agent, GitHub Agent,
+         Log Agent, Jira Agent, etc.)
+                    │
+        ┌───────────┴────────────┐
+        │                        │
+        ▼ (if new data)          ▼ (if indexed doc)
+    Ingestion Pipeline      Update Knowledge
+    ├─ Parse (Docling)      Graph & Chunk Index
+    ├─ Mask PII (GLiNER)
+    ├─ Chunk (Semantic)
+    ├─ Embed (BGE-M3)
+    ├─ Store (Qdrant)
+    └─ Index (PostgreSQL)
+        │
+        ▼
+  Enrichment Agent
+  ├─ Extract entities (GLiNER)
+  ├─ Extract relationships (LLM)
+  ├─ Materialize to Neo4j (Area 5)
+  └─ Tag for Analytics (Area 3)
+```
+
+**Key features:**
+- **Priority tiers**: Errors/alerts real-time, metrics/logs batched to prevent queue storms
+- **Extensible at each layer**: Auth handlers, payload parsers, field transformers, RBAC rules (pluggable per org)
+- **Local-first**: Phase 1 on-prem, Phase 2 adds cloud regions (data never leaves org boundary)
+- **Idempotent**: Content hash prevents re-indexing duplicates
+- **TTL-aware**: Ephemeral data (logs: 7d, metrics: 30d) managed via Redis & scheduled cleanup
+- **Single tenant**: Team/workspace routing via `space_id` + RBAC tags
 
 ### Iterative Execution Loop
 
@@ -166,33 +241,85 @@ Continues until confidence threshold is met or escalation is triggered.
 ## 7. Full Query Pipeline
 
 ```
-User Query
-    │
-    ▼
-Orchestrator Agent
-    │ (classify query type: lookup / summarisation / troubleshooting / comparison / analytics)
-    │ (route to specialist agent(s))
-    ▼
-Specialist Agent(s)
-    │ (Doc Search / Live Doc / Jira Ticket / Summariser / Analytics)
-    ▼
-Context Compression
-    │ (post-reranking: merge redundant overlapping chunks before LLM)
-    ▼
-Generator Agent
-    │ (synthesise cited answer with confidence score per claim)
-    ▼
-Critic Agent
-    │ (verify: is every claim grounded? any hallucinations? sources cited?)
-    │
-    ├── PASS ──▶ Cited answer delivered to user
-    │                │
-    │                ▼
-    │           Interaction logged → Analytics + Knowledge Loop updated
-    │
-    └── FAIL ──▶ Refine response → re-evaluate
-                      │
-                      └── Persistent failure ──▶ HITL escalation queue
+INGESTION (Real-time & Scheduled)
+┌─────────────────────────────────────┐
+│ Webhook / Poller / API               │
+│ (Slack, GitHub, Logs, Metrics, etc) │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+        Celery Task Router
+        (Priority Dispatcher)
+               │
+               ▼
+        Source Agents
+        (apply extensions,
+         transformers, auth)
+               │
+               ▼
+        Ingestion Pipeline
+        ├─ Parse & Clean
+        ├─ Mask PII (GLiNER)
+        ├─ Chunk (Semantic)
+        ├─ Embed (BGE-M3)
+        └─ Store (Qdrant)
+               │
+               ▼
+        Enrichment Agent
+        ├─ Extract entities
+        ├─ Extract relationships
+        └─ Materialize graph (Neo4j)
+
+                    ↕ (indexed data)
+
+QUERY-TIME (Real-time)
+┌─────────────────────────────────────┐
+│ User Query                           │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+        Orchestrator Agent
+        (classify query type,
+         choose retrieval strategy)
+               │
+     ┌─────────┼─────────┐
+     │         │         │
+     ▼         ▼         ▼
+Specialist Agents (in parallel or sequence)
+├─ Doc Search Agent (T1 semantic/keyword)
+├─ Live Doc Agent (T3 real-time URLs)
+├─ Slack Context Agent (decisions)
+├─ Error Trace Agent (troubleshooting)
+├─ Jira Ticket Agent (issues)
+└─ Analytics Agent (metrics/trends)
+     │         │         │
+     └─────────┼─────────┘
+               │
+               ▼
+        Context Compression
+        (merge overlapping chunks)
+               │
+               ▼
+        Generator Agent
+        (synthesise answer with citations)
+               │
+               ▼
+        Critic Agent
+        (verify grounding, hallucinations)
+               │
+        ┌──────┴──────┐
+        │ PASS        │ FAIL
+        ▼             ▼
+    Return Answer  Refine & Re-evaluate
+    to User        (loop or escalate)
+        │             │
+        └──────┬──────┘
+               │
+               ▼
+        Interaction Logged
+        ├─ Query event → Area 3 Analytics
+        ├─ Validation signal → Knowledge Loop
+        └─ Feedback → Area 4 Anomaly Detection
 ```
 
 ---
@@ -217,6 +344,10 @@ Critic Agent
 5. **Retrieval beats generation** — prefer grounded retrieved content over LLM synthesis for factual claims
 6. **Vertical slice first** — one data source, full pipeline end-to-end, before expanding scope
 7. **The five areas are one system** — design each component so its output is consumable by at least one other area
+8. **80/20 Extensibility** — 80% core logic (webhook routing, queue management, agent dispatch), 20% pluggable (field transformers, auth handlers, RBAC rules, payload parsers)
+9. **Configuration-driven** — YAML templates + database overrides (per-org customization without code forking)
+10. **Multi-tenant ready** — Single tenant Phase 1, team-isolated RBAC, extensible to customer-isolated SaaS Phase 2
+11. **Tiered ingestion** — Critical real-time (errors, alerts), routine batched (logs, metrics); queue doesn't storm on high volume
 
 ---
 
