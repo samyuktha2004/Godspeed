@@ -1,5 +1,6 @@
 """Distributed locks to prevent concurrent syncing of same source."""
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional
@@ -136,6 +137,3 @@ class LockPool:
             await lock.release(resource)
 
         self.locks.clear()
-
-
-import asyncio

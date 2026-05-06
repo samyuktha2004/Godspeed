@@ -1928,5 +1928,370 @@ webhooks:
 
 ---
 
+## 13. Implementation Infrastructure: Celery, Redis & Webscraping
+
+### 13.1 Overview
+
+The architecture described above is powered by a scalable, distributed task queue and caching system:
+
+```
+Data Sources & Webhooks
+        ↓
+   [Adapters] ← Web scraper, polling, webhooks
+        ↓
+Celery Task Queue (Redis-backed)
+  - Priority routing (CRITICAL > HIGH > NORMAL > LOW)
+  - Periodic polling via beat scheduler
+  - Real-time webhook processing
+  - Retry logic with exponential backoff
+        ↓
+Ingestion Pipeline
+  (Parsing, chunking, embedding, storage)
+```
+
+### 13.2 Components
+
+#### A. Redis Utilities (`src/redis/`)
+
+**Cache Layer:**
+```python
+from src.redis.cache import SyncStateCache, CredentialCache
+
+# Track last sync time per source
+sync_state = SyncStateCache(redis_client)
+last_sync = await sync_state.get_last_sync("slack", "workspace-123")
+
+# Store integration credentials (TTL prevents exposure)
+creds = CredentialCache(redis_client)
+await creds.set_credentials("slack", "org-123", {"token": "xoxb-..."})
+```
+
+**Task Queues:**
+```python
+from src.redis.queues import IngestQueue, Priority
+
+# Priority-ordered queue for documents
+queue = IngestQueue(redis_client)
+await queue.add(
+    source_type="slack",
+    payload=document.__dict__,
+    rbac_tags={"channel": "general"},
+    priority=Priority.CRITICAL  # Real-time processing
+)
+
+# Auto-retry with backoff, dead-letter queue after 3 failures
+```
+
+**Distributed Locks:**
+```python
+from src.redis.locks import DistributedLock
+
+lock = DistributedLock(redis_client)
+if await lock.acquire("slack:workspace-123", timeout_seconds=3600):
+    # Prevents concurrent syncs of same source
+    try:
+        await adapter.fetch_incremental(space_id, last_sync)
+    finally:
+        await lock.release("slack:workspace-123")
+```
+
+**State Management:**
+```python
+from src.redis.session_state import WebhookProcessingState
+
+state = WebhookProcessingState(redis_client)
+
+# Idempotency: prevents re-processing duplicate webhooks
+if not await state.is_completed("webhook-id-xyz"):
+    await state.mark_processing("webhook-id-xyz")
+    # Process webhook...
+    await state.mark_completed("webhook-id-xyz", result)
+```
+
+#### B. Celery Task Queue (`src/celery_app.py`)
+
+**Configuration:**
+```python
+# Queue definitions with priorities
+app.conf.task_queues = (
+    Queue("critical", priority=10),  # Webhooks (real-time)
+    Queue("high", priority=7),       # Enrichment, important tasks
+    Queue("default", priority=5),    # Standard polling
+    Queue("polling", priority=3),    # Background syncs
+    Queue("low", priority=1),        # Monitoring
+)
+
+# Task routing
+app.conf.task_routes = {
+    "tasks.webhooks.*": {"queue": "critical"},
+    "tasks.enrichment.*": {"queue": "high"},
+    "tasks.polling.*": {"queue": "polling"},
+}
+```
+
+**Periodic Tasks (Beat Scheduler):**
+```python
+@app.on_after_finalize.connect
+def setup_periodic_tasks(sender, **kwargs):
+    # Slack: every 15 minutes (chat moves fast)
+    sender.add_periodic_task(900, sync_slack_incremental.s())
+    
+    # GitHub: every 1 hour
+    sender.add_periodic_task(3600, sync_github_incremental.s())
+    
+    # Logs: every 5 minutes (real-time errors)
+    sender.add_periodic_task(300, poll_server_logs.s())
+    
+    # Metrics: every 15 minutes (anomaly detection)
+    sender.add_periodic_task(900, poll_metrics_anomalies.s())
+```
+
+#### C. Web Scraping (`src/adapters/web_scraper.py`)
+
+**Single URL:**
+```python
+from src.adapters.web_scraper import WebScraperAdapter
+
+adapter = WebScraperAdapter()
+doc = await adapter.fetch_url("https://example.com/article")
+# Returns RawDocument with extracted text, title, metadata
+```
+
+**Sitemap Crawling:**
+```python
+from src.adapters.web_scraper import SitemapAdapter
+
+adapter = SitemapAdapter()
+docs = await adapter.fetch_all("https://example.com")
+# Fetches sitemap.xml, crawls all URLs, respects rate limits
+```
+
+**Via Celery:**
+```python
+from src.tasks.ingestion_tasks import scrape_url, scrape_sitemap
+
+# Async (returns immediately, processed in background)
+scrape_url.delay("https://example.com/page")
+scrape_sitemap.delay("https://example.com")
+
+# Monitor in Flower UI (http://localhost:5555)
+```
+
+#### D. Polling Adapters (`src/adapters/polling.py`)
+
+**Server Logs:**
+```python
+from src.adapters.polling import LogAggregatorAdapter
+
+adapter = LogAggregatorAdapter()
+docs = await adapter.fetch_incremental("api-backend", last_sync)
+
+# Reads from log file, extracts ERROR/WARN entries
+# Returns RawDocuments with level, trace ID, stack trace
+```
+
+**Metrics, Errors, Business Data:**
+```python
+from src.adapters.polling import MetricsAdapter, ErrorTraceAdapter, BusinessDataAdapter
+
+# Placeholders for integration with:
+# - Prometheus, Datadog, New Relic (metrics)
+# - Sentry, Datadog APM, New Relic (error traces)
+# - Salesforce, NetSuite, ERP systems (business data)
+```
+
+#### E. Webhook Handlers (`src/integrations/webhooks.py`)
+
+**Slack:**
+```python
+from src.integrations.webhooks import SlackWebhookHandler
+
+handler = SlackWebhookHandler(redis_client)
+
+# Verify webhook signature (prevents spoofing)
+if handler.validator.verify_slack_signature(body, headers, signing_secret):
+    # Handle different event types
+    if event_type == "message":
+        doc = await handler.handle_message_event(payload)
+        priority = Priority.NORMAL
+    elif event_type == "app_mention":
+        doc = await handler.handle_app_mention_event(payload)
+        priority = Priority.CRITICAL  # Real-time alerts
+```
+
+**GitHub, Jira, Logs:**
+```python
+from src.integrations.webhooks import (
+    GitHubWebhookHandler, JiraWebhookHandler, LogWebhookHandler
+)
+
+# Same pattern: verify → parse → create RawDocument → queue
+```
+
+#### F. Ingestion Orchestrator (`src/ingestion/orchestrator.py`)
+
+Coordinates all sources:
+```python
+from src.ingestion.orchestrator import IngestionOrchestrator
+
+orchestrator = IngestionOrchestrator(redis_client)
+
+result = await orchestrator.ingest_from_source(
+    source_type="slack",
+    space_id="workspace-123",
+    credentials={"bot_token": "xoxb-..."},
+    mode="incremental"
+)
+
+# Features:
+# - Distributed lock (prevents concurrent syncs)
+# - Last sync tracking (incremental vs full)
+# - Automatic retry with backoff
+# - Metrics & logging
+```
+
+### 13.3 Configuration
+
+**Environment Variables (`src/config.py`):**
+
+```bash
+# Redis
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+# Celery
+CELERY_BROKER_URL=redis://localhost:6379/1
+CELERY_RESULT_BACKEND=redis://localhost:6379/2
+
+# Integrations
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_SIGNING_SECRET=...
+GITHUB_TOKEN=ghp_...
+GITHUB_WEBHOOK_SECRET=...
+JIRA_INSTANCE_URL=https://company.atlassian.net
+JIRA_API_TOKEN=...
+
+# Polling intervals (seconds)
+SLACK_POLL_INTERVAL=900
+LOGS_POLL_INTERVAL=300
+METRICS_POLL_INTERVAL=900
+
+# Web scraping
+WEB_SCRAPER_TIMEOUT=30
+USER_AGENT=Godspeed-Bot/1.0
+```
+
+### 13.4 Startup Commands
+
+```bash
+# Start Redis
+redis-server
+
+# Start Celery worker (processes tasks)
+celery -A src.celery_app worker \
+  -Q critical,high,default,polling,webhooks \
+  --loglevel=info
+
+# Start Beat scheduler (periodic tasks)
+celery -A src.celery_app beat --loglevel=info
+
+# Monitor (optional, web UI)
+celery -A src.celery_app flower --port=5555
+```
+
+### 13.5 Complete Example Flow
+
+**Ingest Slack messages:**
+
+1. **Setup webhook** in Slack dashboard → points to `POST /webhooks/slack`
+
+2. **Receive event** → handler verifies signature → creates RawDocument
+
+3. **Queue for processing** → IngestQueue with priority=CRITICAL
+
+4. **Celery worker processes** → passes to ingestion pipeline
+
+5. **Pipeline executes** → parse → chunk → embed → store
+
+6. **Result indexed** → Postgres + Qdrant + Neo4j
+
+**Monitor:**
+- Flower UI shows task progress
+- Redis CLI shows queue depth
+- Logs show parsing/storage status
+
+### 13.6 Failure Handling
+
+**Automatic retry:**
+```python
+@app.task(bind=True, max_retries=3)
+def process_webhook(self, ...):
+    try:
+        # Do work
+    except Exception as e:
+        # Retry with exponential backoff (60s, 120s, 180s)
+        raise self.retry(exc=e, countdown=60)
+```
+
+**Dead-letter queue:**
+```python
+# After 3 failures, tasks move to DLQ
+queue = IngestQueue(redis_client)
+dlq_items = redis_client.lrange("ingest:deadletter", 0, -1)
+
+# Inspect failed tasks, fix issue, manually re-queue if needed
+```
+
+### 13.7 Testing
+
+```bash
+# Test web scraper
+python -c "
+import asyncio
+from src.adapters.web_scraper import WebScraperAdapter
+
+adapter = WebScraperAdapter()
+doc = asyncio.run(adapter.fetch_url('https://example.com'))
+print(f'Title: {doc.title}')
+print(f'Content length: {len(doc.content)}')
+"
+
+# Test polling
+python -c "
+import asyncio
+from src.adapters.polling import LogAggregatorAdapter
+from datetime import datetime, timedelta
+
+adapter = LogAggregatorAdapter()
+last_sync = datetime.utcnow() - timedelta(minutes=5)
+docs = asyncio.run(adapter.fetch_incremental('api-backend', last_sync))
+print(f'Found {len(docs)} log entries')
+"
+
+# Test Celery task
+python -c "
+from src.tasks.ingestion_tasks import scrape_url
+task = scrape_url.delay('https://example.com')
+print(f'Task ID: {task.id}')
+# Check status in Flower
+"
+```
+
+### 13.8 Integration with Phases
+
+| Phase | Infrastructure | Status |
+|-------|-----------------|--------|
+| **Phase 1** | Config, adapters, orchestrator | ✅ Ready |
+| **Phase 2** | Celery tasks, webhooks, polling | ✅ Ready |
+| **Phase 3** | Business data adapters (placeholder) | 🔄 Extensible |
+| **Phase 4** | OCR integration, multimodal | 🔄 Extensible |
+| **Phase 5** | KG materialization tasks | 🔄 To implement |
+
+---
+
+*For detailed implementation guide, see: [WEBSCRAPING_CELERY_REDIS.md](../WEBSCRAPING_CELERY_REDIS.md)*
+
 *Previous: [04_integrations_and_tech_stack.md](./04_integrations_and_tech_stack.md)*
 *Reference: [01_problem_and_architecture.md](./01_problem_and_architecture.md) for Area 5 knowledge graph design*
+
+
