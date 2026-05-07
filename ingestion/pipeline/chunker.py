@@ -4,26 +4,25 @@ import hashlib
 import logging
 from typing import Optional
 
-import spacy
-
 from ingestion.config import settings
 from ingestion.models import DocumentChunk, RawDocument
 
 logger = logging.getLogger(__name__)
 
-_nlp: Optional[spacy.language.Language] = None
+_nlp = None
 
 
-def _get_nlp() -> spacy.language.Language:
+def _get_nlp():
     global _nlp
     if _nlp is None:
+        import spacy
         logger.info("chunker: loading spacy model %s", settings.spacy_model)
         _nlp = spacy.load(settings.spacy_model, disable=["ner", "parser"])
         _nlp.enable_pipe("senter")
     return _nlp
 
 
-def _token_count(nlp: spacy.language.Language, text: str) -> int:
+def _token_count(nlp, text: str) -> int:
     return len(nlp.tokenizer(text))
 
 

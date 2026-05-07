@@ -15,6 +15,22 @@ logger = logging.getLogger(__name__)
 _SOURCE_REGISTRY: dict[str, Any] = {}
 
 
+async def _run_graph_pipeline(embedded, doc) -> None:
+    from graph_store.config import settings as graph_settings
+
+    if not graph_settings.neo4j_uri:
+        logger.warning("ingest_job: NEO4J_URI not set — skipping graph pipeline")
+        return
+    try:
+        from graph_store.pipeline import run_graph_pipeline
+        from graph_store.writer import get_driver
+        await run_graph_pipeline(embedded, doc, get_driver())
+    except Exception:
+        logger.exception(
+            "ingest_job: graph pipeline failed for doc_id=%s — continuing without graph", doc.doc_id
+        )
+
+
 def _get_source_registry() -> dict[str, Any]:
     if not _SOURCE_REGISTRY:
         from ingestion.sources.confluence import ConfluenceSource
@@ -107,6 +123,8 @@ async def _run_ingest_async(job_id: str, payload: IngestSourcePayload) -> dict[s
             upsert_document(doc, client=sb)
             total_chunks += len(chunks)
             logger.info("ingest_job: ingested %d chunks for doc_id=%s", len(chunks), doc.doc_id)
+
+            await _run_graph_pipeline(embedded, doc)
 
         rebuild_from_supabase()
 

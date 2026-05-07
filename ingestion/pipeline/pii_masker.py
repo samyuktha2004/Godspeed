@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from gliner import GLiNER
-
 from ingestion.config import settings
 
 logger = logging.getLogger(__name__)
@@ -19,12 +17,13 @@ _PII_ENTITY_TYPES = [
     "date_of_birth",
 ]
 
-_model: Optional[GLiNER] = None
+_model = None
 
 
-def _get_model() -> GLiNER:
+def _get_model():
     global _model
     if _model is None:
+        from gliner import GLiNER
         logger.info("pii_masker: loading GLiNER model %s", settings.gliner_model)
         _model = GLiNER.from_pretrained(settings.gliner_model)
     return _model

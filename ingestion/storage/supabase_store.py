@@ -45,6 +45,7 @@ def upsert_chunks(chunks: list[DocumentChunk], client: Optional[Client] = None) 
         rows = [
             {
                 "chunk_id": c.chunk_id,
+                "qdrant_id": c.chunk_id,
                 "doc_id": c.doc_id,
                 "text": c.text,
                 "source": c.source,

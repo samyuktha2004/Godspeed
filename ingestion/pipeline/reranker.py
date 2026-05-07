@@ -3,18 +3,17 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from FlagEmbedding import FlagReranker
-
 from ingestion.config import settings
 
 logger = logging.getLogger(__name__)
 
-_reranker: Optional[FlagReranker] = None
+_reranker = None
 
 
-def _get_reranker() -> FlagReranker:
+def _get_reranker():
     global _reranker
     if _reranker is None:
+        from FlagEmbedding import FlagReranker
         logger.info("reranker: loading model %s", settings.bge_reranker_model)
         _reranker = FlagReranker(settings.bge_reranker_model, use_fp16=True)
     return _reranker
