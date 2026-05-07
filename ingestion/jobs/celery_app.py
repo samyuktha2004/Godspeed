@@ -12,6 +12,9 @@ celery_app = Celery(
     include=[
         "ingestion.jobs.ingest_job",
         "ingestion.jobs.cag_job",
+        "src.jira_agent.tasks",
+        "src.confluence_agent.tasks",
+        "src.file_agent.tasks",
     ],
 )
 
@@ -29,5 +32,9 @@ celery_app.conf.beat_schedule = {
     "cag-nightly": {
         "task": "ingestion.jobs.cag_job.run_cag",
         "schedule": crontab(hour=2, minute=0),
-    }
+    },
+    "confluence-periodic-sync": {
+        "task": "confluence.periodic_sync",
+        "schedule": crontab(minute=0),
+    },
 }
