@@ -32,4 +32,4 @@ def dispatch(path: str, fmt: str) -> list[Block]:
 
 
 # Import parsers to trigger registration
-from src.file_agent.parsers import pdf, docx, xml, csv, html  # noqa: F401, E402
+from src.file_agent.parsers import pdf, docx, xml, csv, html, text  # noqa: F401, E402
