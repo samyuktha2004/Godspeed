@@ -116,7 +116,7 @@ class JiraAdapter:
         if not self._base_url or not self._api_token:
             logger.warning("jira_adapter: credentials not configured, returning empty")
             return []
-        url = f"{self._base_url}/rest/api/3/search"
+        url = f"{self._base_url}/rest/api/3/search/jql"
         start = 0
         page_size = 50
         docs: list[RawDocument] = []
@@ -138,9 +138,8 @@ class JiraAdapter:
                     issues = data.get("issues", [])
                     for issue in issues:
                         docs.append(self._issue_to_raw_document(issue))
-                    total = data.get("total", 0)
                     start += len(issues)
-                    if start >= total or not issues:
+                    if data.get("isLast", True) or not issues:
                         break
                 except Exception:
                     logger.exception("jira_adapter: JQL fetch failed at start=%d", start)
