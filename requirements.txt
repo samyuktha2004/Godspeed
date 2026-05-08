@@ -10,7 +10,7 @@ FlagEmbedding==1.2.11
 gliner==0.2.13
 
 # Vector database
-qdrant-client==1.12.1
+qdrant-client==1.17.1
 
 # BM25
 rank-bm25==0.2.2
@@ -82,6 +82,3 @@ watchdog==6.0.0
 # File agent — OCR fallback for scanned PDFs (optional but recommended)
 pytesseract==0.3.13
 Pillow==11.1.0
-
-# FastAPI file upload support
-python-multipart==0.0.20

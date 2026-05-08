@@ -4,6 +4,7 @@ import logging
 
 from ingestion.pipeline.embedder import embed_chunks
 from ingestion.pipeline.pii_masker import mask_chunks
+from ingestion.storage import supabase_store
 from ingestion.storage.qdrant_store import delete_chunks_for_doc, upsert_chunks
 from src.jira_agent.adapter import JiraAdapter
 from src.jira_agent.chunker import chunk_jira_issue
@@ -12,11 +13,15 @@ from src.jira_agent.config import jira_config
 logger = logging.getLogger(__name__)
 
 
+def _store(raw_doc, embedded):
+    supabase_store.upsert_document(raw_doc)
+    supabase_store.delete_chunks_for_doc(raw_doc.doc_id)
+    supabase_store.upsert_chunks(embedded)
+    delete_chunks_for_doc(raw_doc.doc_id)
+    upsert_chunks(embedded)
+
+
 async def ingest_issue(issue_key: str, team_id: str = "") -> int:
-    """
-    Full pipeline for a single Jira issue.
-    Returns the number of chunks stored.
-    """
     team_id = team_id or jira_config.team_id
     adapter = JiraAdapter(team_id=team_id)
 
@@ -36,17 +41,13 @@ async def ingest_issue(issue_key: str, team_id: str = "") -> int:
         chunk.text = masked
 
     embedded = embed_chunks(chunks)
-
-    # Idempotent: remove old vectors before upserting new ones
-    delete_chunks_for_doc(raw_doc.doc_id)
-    upsert_chunks(embedded)
+    _store(raw_doc, embedded)
 
     logger.info("jira_pipeline: stored %d chunks for %s", len(embedded), issue_key)
     return len(embedded)
 
 
 async def ingest_project(project_key: str, team_id: str = "") -> int:
-    """Full sync of all issues in a project. Returns total chunks stored."""
     team_id = team_id or jira_config.team_id
     adapter = JiraAdapter(team_id=team_id)
     docs = await adapter.fetch_all(project_key)
@@ -61,8 +62,7 @@ async def ingest_project(project_key: str, team_id: str = "") -> int:
         for chunk, masked in zip(chunks, masked_texts):
             chunk.text = masked
         embedded = embed_chunks(chunks)
-        delete_chunks_for_doc(raw_doc.doc_id)
-        upsert_chunks(embedded)
+        _store(raw_doc, embedded)
         total += len(embedded)
         logger.info("jira_pipeline: stored %d chunks for %s", len(embedded), key)
 

@@ -4,12 +4,21 @@ import logging
 
 from ingestion.pipeline.embedder import embed_chunks
 from ingestion.pipeline.pii_masker import mask_chunks
+from ingestion.storage import supabase_store
 from ingestion.storage.qdrant_store import delete_chunks_for_doc, upsert_chunks
 from src.confluence_agent.adapter import ConfluenceAdapter
 from src.confluence_agent.chunker import chunk_confluence_page
 from src.confluence_agent.config import confluence_config
 
 logger = logging.getLogger(__name__)
+
+
+def _store(raw_doc, embedded):
+    supabase_store.upsert_document(raw_doc)
+    supabase_store.delete_chunks_for_doc(raw_doc.doc_id)
+    supabase_store.upsert_chunks(embedded)
+    delete_chunks_for_doc(raw_doc.doc_id)
+    upsert_chunks(embedded)
 
 
 async def ingest_page(page_id: str, space_key: str = "", team_id: str = "") -> int:
@@ -32,8 +41,7 @@ async def ingest_page(page_id: str, space_key: str = "", team_id: str = "") -> i
         chunk.text = m
 
     embedded = embed_chunks(chunks)
-    delete_chunks_for_doc(raw_doc.doc_id)
-    upsert_chunks(embedded)
+    _store(raw_doc, embedded)
 
     logger.info("confluence_pipeline: stored %d chunks for page %s", len(embedded), page_id)
     return len(embedded)
@@ -54,8 +62,7 @@ async def ingest_space(space_key: str, team_id: str = "") -> int:
         for chunk, m in zip(chunks, masked):
             chunk.text = m
         embedded = embed_chunks(chunks)
-        delete_chunks_for_doc(raw_doc.doc_id)
-        upsert_chunks(embedded)
+        _store(raw_doc, embedded)
         total += len(embedded)
         logger.info("confluence_pipeline: stored %d chunks for page %s", len(embedded), pid)
 

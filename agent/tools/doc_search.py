@@ -144,51 +144,34 @@ async def run_doc_search(query: str, team_id: str) -> list[RetrievedChunk]:
 
     try:
         client = AsyncQdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
-        results = await client.search(
+        team_filter = qmodels.Filter(
+            must=[qmodels.FieldCondition(key="team_id", match=qmodels.MatchValue(value=team_id))]
+        )
+
+        dense_response = await client.query_points(
             collection_name=settings.qdrant_collection,
-            query_vector=qmodels.NamedVector(
-                name=settings.qdrant_dense_vector_name,
-                vector=dense_vector,
-            ),
-            query_filter=qmodels.Filter(
-                must=[
-                    qmodels.FieldCondition(
-                        key="team_id",
-                        match=qmodels.MatchValue(value=team_id),
-                    )
-                ]
-            ),
+            query=dense_vector,
+            using=settings.qdrant_dense_vector_name,
+            query_filter=team_filter,
             limit=settings.rrf_top_k,
             with_payload=True,
         )
-        for hit in results:
+        for hit in dense_response.points:
             doc_id = hit.payload.get("chunk_id", str(hit.id))
             qdrant_ranked_ids.append(doc_id)
             qdrant_payload_map[doc_id] = hit.payload
             qdrant_score_map[doc_id] = hit.score
 
-        sparse_results = await client.search(
+        sparse_response = await client.query_points(
             collection_name=settings.qdrant_collection,
-            query_vector=qmodels.NamedSparseVector(
-                name=settings.qdrant_sparse_vector_name,
-                vector=qmodels.SparseVector(
-                    indices=sparse_indices,
-                    values=sparse_values,
-                ),
-            ),
-            query_filter=qmodels.Filter(
-                must=[
-                    qmodels.FieldCondition(
-                        key="team_id",
-                        match=qmodels.MatchValue(value=team_id),
-                    )
-                ]
-            ),
+            query=qmodels.SparseVector(indices=sparse_indices, values=sparse_values),
+            using=settings.qdrant_sparse_vector_name,
+            query_filter=team_filter,
             limit=settings.rrf_top_k,
             with_payload=True,
         )
         sparse_ranked_ids: list[str] = []
-        for hit in sparse_results:
+        for hit in sparse_response.points:
             doc_id = hit.payload.get("chunk_id", str(hit.id))
             sparse_ranked_ids.append(doc_id)
             qdrant_payload_map.setdefault(doc_id, hit.payload)
