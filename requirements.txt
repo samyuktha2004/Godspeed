@@ -61,4 +61,21 @@ redis==5.2.1
 
 # Existing project dependencies
 beautifulsoup4==4.12.2
+lxml==5.3.0
 docling==0.7.0
+
+# File agent — document parsers
+pdfplumber==0.11.4
+python-docx==1.1.2
+pandas==2.2.3
+openpyxl==3.1.5
+
+# File agent — file watcher
+watchdog==6.0.0
+
+# File agent — OCR fallback for scanned PDFs (optional but recommended)
+pytesseract==0.3.13
+Pillow==11.1.0
+
+# FastAPI file upload support
+python-multipart==0.0.20
