@@ -7,8 +7,6 @@ import pickle
 from pathlib import Path
 from typing import Optional
 
-from FlagEmbedding import BGEM3FlagModel, FlagReranker
-from gliner import GLiNER
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qmodels
 from rank_bm25 import BM25Okapi
@@ -29,35 +27,36 @@ _PII_ENTITY_TYPES = [
 ]
 
 # singletons — loaded once on first call, models are expensive to initialise
-_embedding_model: Optional[BGEM3FlagModel] = None
-_reranker: Optional[FlagReranker] = None
-_gliner: Optional[GLiNER] = None
+_embedding_model = None
+_reranker = None
+_gliner = None
 _bm25_index: Optional[BM25Okapi] = None
 _bm25_corpus: Optional[list[str]] = None
 _bm25_doc_ids: Optional[list[str]] = None
 
 
-def _get_embedding_model() -> BGEM3FlagModel:
+def _get_embedding_model():
     global _embedding_model
     if _embedding_model is None:
+        from FlagEmbedding import BGEM3FlagModel
         logger.info("Loading BGE-M3 embedding model: %s", settings.bge_embedding_model)
-        _embedding_model = BGEM3FlagModel(
-            settings.bge_embedding_model, use_fp16=True
-        )
+        _embedding_model = BGEM3FlagModel(settings.bge_embedding_model, use_fp16=True)
     return _embedding_model
 
 
-def _get_reranker() -> FlagReranker:
+def _get_reranker():
     global _reranker
     if _reranker is None:
+        from FlagEmbedding import FlagReranker
         logger.info("Loading BGE reranker: %s", settings.bge_reranker_model)
         _reranker = FlagReranker(settings.bge_reranker_model, use_fp16=True)
     return _reranker
 
 
-def _get_gliner() -> GLiNER:
+def _get_gliner():
     global _gliner
     if _gliner is None:
+        from gliner import GLiNER
         logger.info("Loading GLiNER model: %s", settings.gliner_model)
         _gliner = GLiNER.from_pretrained(settings.gliner_model)
     return _gliner

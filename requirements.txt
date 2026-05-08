@@ -59,6 +59,12 @@ celery==5.4.0
 celery[redis]==5.4.0
 redis==5.2.1
 
+# File upload support for FastAPI
+python-multipart==0.0.27
+
+# Graph store
+neo4j==5.27.0
+
 # Existing project dependencies
 beautifulsoup4==4.12.2
 lxml==5.3.0

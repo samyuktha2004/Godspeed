@@ -3,20 +3,19 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from FlagEmbedding import BGEM3FlagModel
-
 from ingestion.config import settings
 from ingestion.models import DocumentChunk, EmbeddedChunk
 
 logger = logging.getLogger(__name__)
 
 # loaded once at module level — BGE-M3 is large; per-request init is unacceptable latency
-_model: Optional[BGEM3FlagModel] = None
+_model = None
 
 
-def _get_model() -> BGEM3FlagModel:
+def _get_model():
     global _model
     if _model is None:
+        from FlagEmbedding import BGEM3FlagModel
         logger.info("embedder: loading BGE-M3 model %s", settings.bge_embedding_model)
         _model = BGEM3FlagModel(settings.bge_embedding_model, use_fp16=True)
     return _model

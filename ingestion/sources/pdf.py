@@ -3,8 +3,6 @@ from __future__ import annotations
 import hashlib
 import logging
 
-import fitz  # PyMuPDF
-
 from ingestion.models import RawDocument
 from ingestion.sources.base import BaseSource
 
@@ -22,6 +20,7 @@ class PDFSource(BaseSource):
 
     async def fetch(self) -> list[RawDocument]:
         try:
+            import fitz
             doc = fitz.open(stream=self._content, filetype="pdf")
             pages_text: list[str] = []
             for page in doc:
