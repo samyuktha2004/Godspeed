@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -44,7 +44,7 @@ class KnowledgeGraphState(BaseModel):
 
     query_input: QueryInput
     execution_plan: Optional[ExecutionPlan] = None
-    agent_results: dict[str, AgentResult] = Field(default_factory=dict)
+    agent_results: Annotated[dict[str, AgentResult], lambda x, y: {**x, **y}] = Field(default_factory=dict)
     final_answer: Optional[str] = None
     citations: list[RetrievedChunk] = Field(default_factory=list)
     guardrail_passed: Optional[bool] = None
