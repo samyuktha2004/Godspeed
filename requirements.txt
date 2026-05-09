@@ -1,9 +1,87 @@
-redis==5.0.1
-celery==5.3.4
-pydantic==2.5.0
-pydantic-settings==2.1.0
-aiohttp==3.9.1
-beautifulsoup4==4.12.2
-docling==0.7.0
+# Core orchestration
+langgraph==0.2.55
+langchain-core==0.3.29
+langchain-google-genai==2.0.9
+
+# Embeddings and reranking
+FlagEmbedding==1.2.11
+
+# GLiNER for PII masking
+gliner==0.2.13
+
+# Vector database
+qdrant-client==1.17.1
+
+# BM25
+rank-bm25==0.2.2
+
+# API framework
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# Pydantic
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# Environment management
+python-dotenv==1.0.1
+
+# HTTP client
+httpx==0.28.1
 requests==2.31.0
-python-dotenv==1.0.0
+aiohttp==3.9.1
+
+# Google AI SDK (transitive, pinned for stability)
+google-generativeai==0.8.3
+google-auth==2.37.0
+
+# Numpy (required by FlagEmbedding)
+numpy==1.26.4
+
+# PyTorch CPU (FlagEmbedding dependency — use GPU build if available)
+torch==2.5.1
+
+# Transformers (FlagEmbedding dependency)
+transformers==4.47.1
+
+# Ingestion — document parsing
+PyMuPDF==1.24.14
+
+# Ingestion — NLP / chunking
+spacy==3.8.3
+# Run after install: python -m spacy download en_core_web_sm
+
+# Ingestion — Supabase
+supabase==2.11.0
+
+# Ingestion — background jobs
+celery==5.4.0
+celery[redis]==5.4.0
+redis==5.2.1
+
+# File upload support for FastAPI
+python-multipart==0.0.27
+
+# Graph store
+neo4j==5.27.0
+
+# Tools agent (GitHub / Slack / Notion via GPT-4o-mini)
+openai>=1.30.0
+
+# Existing project dependencies
+beautifulsoup4==4.12.2
+lxml==5.3.0
+docling==0.7.0
+
+# File agent — document parsers
+pdfplumber==0.11.4
+python-docx==1.1.2
+pandas==2.2.3
+openpyxl==3.1.5
+
+# File agent — file watcher
+watchdog==6.0.0
+
+# File agent — OCR fallback for scanned PDFs (optional but recommended)
+pytesseract==0.3.13
+Pillow==11.1.0

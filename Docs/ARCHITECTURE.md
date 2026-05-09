@@ -84,130 +84,115 @@
 
 ---
 
-## Backend Architecture (src/)
+## Backend Architecture (src/) — Agent-Based Design
+
+### Core Principle: Per-Source Agents
+
+Rather than generic adapters flowing through a single pipeline, each data source is an **independent agent** with:
+- Source-specific authentication & adapters
+- Source-optimized chunking (preserves context like Confluence breadcrumbs, Jira comment threading)
+- Independent Celery tasks (different polling cadences, priorities)
+- Independent FastAPI routers (explicit webhooks like `/webhooks/jira`)
+- Self-contained testing (`test_run.py` per agent)
+
+This design ensures **scalability by source**, **operational clarity**, and **production-grade maintainability**.
 
 ### Directory Structure
 
 ```
 src/
-├── main.py                      # FastAPI app entry point, CORS, middleware setup
-├── config.py                    # Environment config, settings, secrets
-├── celery_app.py                # Celery app init, task discovery
+├── agents_app.py               # Combined FastAPI app: all agent routers + Qdrant/Redis init
 │
-├── adapters/                    # ALL data source adapters (pluggable)
-│   ├── __init__.py             # Registry + factory (dynamic adapter loading)
-│   ├── base.py                 # BaseSourceAdapter interface
-│   │   └── Methods: authenticate(), list_items(), get_item(), sync()
-│   ├── notion.py               # NotionAdapter
-│   ├── confluence.py           # ConfluenceAdapter
-│   ├── github.py               # GitHubAdapter
-│   ├── slack.py                # SlackAdapter
-│   ├── jira.py                 # JiraAdapter
-│   ├── pdf.py                  # PDFAdapter (file upload)
-│   ├── url_fetcher.py          # URLAdapter (Firecrawl + BeautifulSoup)
-│   ├── logs.py                 # LogAggregatorAdapter
-│   ├── metrics.py              # MetricsAdapter
-│   ├── error_traces.py         # ErrorTraceAdapter
-│   ├── business_data.py        # BusinessDataAdapter
-│   └── ocr.py                  # OCRAdapter
-│
-├── integrations/               # Webhooks, event handlers, polling tasks
+├── jira_agent/                 # JIRA ingestion agent (IMPLEMENTED)
 │   ├── __init__.py
-│   ├── webhooks.py             # Generic webhook router
-│   ├── notion/
-│   │   ├── webhooks.py         # Notion webhook handler
-│   │   └── tasks.py            # Notion polling tasks (Celery)
-│   ├── confluence/
-│   │   └── tasks.py            # Confluence polling sync
-│   ├── github/
-│   │   ├── webhooks.py         # GitHub webhook handler
-│   │   └── tasks.py            # GitHub polling tasks
-│   ├── slack/
-│   │   ├── webhooks.py         # Slack event subscriptions
-│   │   └── tasks.py            # Slack message indexing
-│   ├── jira/
-│   │   ├── webhooks.py         # Jira webhook handler
-│   │   └── tasks.py            # Jira issue sync
-│   ├── logs/
-│   │   ├── webhooks.py         # Error log ingestion
-│   │   └── tasks.py            # Log polling
-│   ├── metrics/
-│   │   └── tasks.py            # Metrics collection
-│   └── business_data/
-│       └── tasks.py            # ERP data sync
+│   ├── config.py               # JiraAgentConfig — JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN,
+│   │                           #   JIRA_PROJECT_KEYS (csv), JIRA_WEBHOOK_SECRET, TEAM_ID
+│   ├── adapter.py              # JiraAdapter — fetch_issue, fetch_all (JQL), fetch_incremental
+│   │                           #   Basic auth (base64 email:api_token), ADF text extraction
+│   ├── chunker.py              # chunk_jira_issue → chunk 0: issue body, chunks 1..N: comments
+│   │                           #   Preserves thread structure for relation extraction
+│   ├── pipeline.py             # ingest_issue / ingest_project → chunk → PII mask → embed → Qdrant
+│   │                           #   Returns entity graph nodes for real-time streaming
+│   ├── tasks.py                # Celery: jira_process_issue (queue=critical), 
+│   │                           #   jira_sync_project (queue=polling)
+│   ├── router.py               # FastAPI: POST /webhooks/jira, POST /jira/sync/{project_key}
+│   └── test_run.py             # Mock + real runthrough; works without credentials
 │
-├── orm/                        # Database adapters (for ERP/CRM sources)
+├── confluence_agent/           # Confluence ingestion agent (IMPLEMENTED)
 │   ├── __init__.py
-│   ├── base.py                 # BaseORM interface
-│   ├── postgres.py             # PostgreSQL queries
-│   ├── salesforce.py           # Salesforce REST API
-│   ├── netsuite.py             # NetSuite SuiteTalk API
-│   ├── sap.py                  # SAP OData API
-│   └── generic_rest.py         # Generic REST API wrapper
+│   ├── config.py               # ConfluenceAgentConfig — BASE_URL, TOKEN, EMAIL,
+│   │                           #   CONFLUENCE_SPACES (csv), CONFLUENCE_WEBHOOK_SECRET, TEAM_ID
+│   ├── adapter.py              # ConfluenceAdapter — fetch_page, fetch_space, fetch_incremental (CQL)
+│   │                           #   REST v2 API with pagination
+│   ├── chunker.py              # chunk_confluence_page — BeautifulSoup heading-split + breadcrumbs
+│   │                           #   [Space > Ancestor > Page] prefix on every chunk; tables = 1 chunk each
+│   │                           #   Preserves hierarchy for entity linking
+│   ├── pipeline.py             # ingest_page / ingest_space → chunk → PII mask → embed → Qdrant
+│   │                           #   Returns entity graph nodes
+│   ├── tasks.py                # Celery: confluence_process_page (queue=critical), 
+│   │                           #   confluence_sync_space (queue=polling),
+│   │                           #   confluence_periodic_sync (beat, 60 min incremental sync)
+│   ├── router.py               # FastAPI: POST /webhooks/confluence, POST /confluence/sync/{space_key}
+│   │                           #   POST /confluence/search (for admin dashboard)
+│   └── test_run.py             # Mock + real runthrough; works without credentials
 │
-├── ingestion/                  # Data processing pipeline (multi-stage)
+├── file_agent/                 # File ingestion agent (IMPLEMENTED)
 │   ├── __init__.py
-│   ├── orchestrator.py         # Routes docs through pipeline stages
-│   ├── fetcher.py              # Stage 1: FETCH from sources
-│   ├── normalizer.py           # Stage 2: CLEAN & NORMALISE (Docling)
-│   ├── pii_masker.py           # Stage 3: PII MASKING (GLiNER, local)
-│   ├── chunker.py              # Stage 4: SEMANTIC CHUNKING
-│   ├── tagger.py               # Stage 5: METADATA TAGGING
-│   ├── embedder.py             # Embed chunks (BGE-M3)
-│   ├── indexer.py              # Index to Qdrant (dense + sparse)
-│   └── models.py               # Pydantic models for ingestion
+│   ├── config.py               # FileAgentConfig — UPLOAD_DIR, MAX_FILE_SIZE, ALLOWED_TYPES
+│   ├── adapter.py              # FileAdapter — handle PDFs, DOCX, PPTX, TXT
+│   │                           #   Uses docling for multi-format parsing
+│   ├── chunker.py              # chunk_file_document — respects document structure (sections, pages)
+│   ├── pipeline.py             # ingest_file → chunk → PII mask → embed → Qdrant
+│   ├── tasks.py                # Celery: file_process_upload (queue=critical)
+│   ├── router.py               # FastAPI: POST /files/upload, GET /files/{file_id}
+│   └── test_run.py
 │
-├── retrieval/                  # T1, T2, T3 retrieval layers
+├── shared/                     # Shared utilities (used by all agents)
 │   ├── __init__.py
-│   ├── hybrid_search.py        # T1: Dense + Sparse (RRF fusion)
+│   ├── pii_masker.py           # GLiNER-based PII detection (local, zero egress)
+│   ├── embedder.py             # BGE-M3 embeddings (local inference)
+│   ├── qdrant_client.py        # Qdrant connection + upsert helpers
+│   ├── entity_extractor.py     # Extract entities/relationships from chunks (used per-agent)
+│   ├── models.py               # Pydantic models (RawDocument, ChunkedDocument, Entity, Graph)
+│   └── config.py               # Shared config (QDRANT_URL, REDIS_URL, etc.)
+│
+├── retrieval/                  # T1, T2, T3 retrieval layers (shared across queries)
+│   ├── __init__.py
+│   ├── hybrid_search.py        # T1: Dense + Sparse (RRF fusion) — queries Qdrant
 │   ├── reranker.py             # BGE-reranker-v2-m3 integration
 │   ├── context_compressor.py   # Compress top-5 into LLM context
-│   ├── cag_agent.py            # T2: Cache-Augmented Generation
+│   ├── cag_agent.py            # T2: Cache-Augmented Generation (recent syncs)
 │   ├── live_doc_agent.py       # T3: Real-time doc fetching (Firecrawl)
 │   └── models.py               # Pydantic models for retrieval
 │
-├── agents/                     # LangGraph agents (multi-agent orchestration)
+├── query_engine/               # Query execution (LangGraph-based)
 │   ├── __init__.py
-│   ├── base.py                 # BaseAgent interface
-│   ├── generator_agent.py      # Generator (creates answer)
-│   ├── critic_agent.py         # Critic (validates answer)
-│   ├── ingestion_agent.py      # Ingestion orchestrator
-│   ├── entity_extractor_agent.py # Extracts entities for knowledge graph
-│   ├── anomaly_detector_agent.py # Detects query anomalies
-│   └── graph_builder.py        # Constructs LangGraph stateful workflow
+│   ├── generator_agent.py      # Generator LLM agent (creates answer from context)
+│   ├── critic_agent.py         # Critic LLM agent (validates against sources)
+│   ├── orchestrator.py         # LangGraph: routes query through retrieval → generation → validation
+│   ├── streaming.py            # Stream answer chunks + citations + graph to frontend
+│   └── models.py               # Pydantic models for query responses
 │
-├── redis/                      # Redis utilities (caching, queues, state)
+├── redis/                      # Redis utilities (shared)
 │   ├── __init__.py
 │   ├── cache.py                # Caching layer (with TTL)
-│   ├── queues.py               # Task queues (ingest, webhook, low-priority)
-│   ├── session_state.py        # Session state management
-│   ├── locks.py                # Distributed locks (prevents race conditions)
-│   └── pubsub.py               # Pub/sub for real-time updates
+│   ├── queues.py               # Task queues (per-agent ingestion, webhook events)
+│   ├── session_state.py        # Query session state
+│   ├── locks.py                # Distributed locks (prevent concurrent agent syncs)
+│   └── pubsub.py               # Pub/sub for real-time graph updates to frontend (query_id → node)
 │
-├── tasks/                      # Celery task definitions (background jobs)
-│   ├── __init__.py
-│   ├── ingestion_tasks.py      # Main ingest orchestration
-│   ├── sync_tasks.py           # Periodic polling tasks (incremental syncs)
-│   ├── webhook_tasks.py        # Handle webhook queuing
-│   ├── validation_tasks.py     # Generator + Critic validation
-│   ├── analytics_tasks.py      # Aggregate analytics (nightly jobs)
-│   ├── dependency_tasks.py     # Check for breaking changes
-│   └── cleanup_tasks.py        # Maintenance (cache expiry, log rotation)
-│
-├── api/                        # REST API endpoints
+├── api/                        # FastAPI main app + shared endpoints
 │   ├── __init__.py
 │   ├── auth.py                 # POST /auth/login, /auth/logout, /auth/refresh
-│   ├── query.py                # POST /query (main search), /follow-up
-│   ├── analytics.py            # GET /analytics/queries, /health, /trends
-│   ├── admin.py                # POST/GET /admin/sources, /users, /rbac
-│   ├── workspace.py            # GET/POST /workspace/queries, /saved
-│   └── dependencies.py         # GET /dependencies/
+│   ├── query.py                # POST /api/query (streaming), /api/query/{id}/follow-up
+│   ├── workspace.py            # GET/POST /api/workspace/queries, /saved
+│   ├── admin.py                # GET /api/admin/agents (show all agent statuses)
+│   └── graph.py                # GET /api/graph/entities, /api/graph/query/{query_id}
 │
 ├── db/                         # Database models & utilities
 │   ├── __init__.py
-│   ├── models.py               # SQLAlchemy models (User, Query, Document, etc.)
+│   ├── models.py               # SQLAlchemy models (User, Query, Document, Entity, Graph)
 │   ├── session.py              # Database session management
-│   ├── migrations/             # Alembic migrations (if using)
 │   └── init_db.py              # Schema initialization
 │
 ├── auth/                       # Authentication & authorization
@@ -223,37 +208,42 @@ src/
 │   ├── logger.py               # Structured logging (JSON)
 │   ├── metrics.py              # Prometheus metrics
 │   ├── telemetry.py            # OpenTelemetry (phase 2)
-│   ├── cache_utils.py          # Cache helpers (with decorator)
-│   ├── validators.py           # Input validation helpers
 │   └── exceptions.py           # Custom exceptions
-│
-├── ml/                         # ML model integration (inference only)
-│   ├── __init__.py
-│   ├── embedder.py             # BGE-M3 embeddings (HuggingFace)
-│   ├── reranker.py             # BGE-reranker-v2-m3
-│   ├── pii_detector.py         # GLiNER for PII
-│   ├── entity_extractor.py     # Entity/relation extraction
-│   └── models_config.py        # Model paths, device selection (CPU/GPU)
 │
 └── tests/                      # Comprehensive test suite
     ├── __init__.py
-    ├── test_adapters.py        # Unit tests for adapters
-    ├── test_retrieval.py       # Unit tests for retrieval
-    ├── test_agents.py          # Integration tests for agents
-    ├── test_api.py             # API endpoint tests
+    ├── agents/                 # Per-agent tests (JIRA, Confluence, File)
+    ├── retrieval/              # Retrieval pipeline tests
+    ├── query_engine/           # Query generation + validation tests
     ├── fixtures/               # Pytest fixtures (mock data)
-    └── integration/            # End-to-end test scenarios
+    └── integration/            # End-to-end scenarios
 ```
 
 ### Key Backend Design Decisions
 
-1. **Adapter Pattern:** All data sources implement `BaseSourceAdapter`. New sources can be added without modifying core logic.
-2. **Multi-Stage Ingestion:** 5-stage pipeline ensures consistent quality (fetch → clean → mask → chunk → tag).
-3. **PII Masking First:** GLiNER runs locally before ANY data hits the vector store (GDPR/HIPAA compliant).
-4. **Hybrid Retrieval (T1):** Dense embeddings (BGE-M3) + Sparse indexing (BM25) fused via RRF for recall.
-5. **LangGraph Orchestration:** Stateful multi-agent workflow for Generator + Critic validation.
-6. **Redis Everywhere:** Cache, queues, session state, distributed locks, and pub/sub all via Redis.
-7. **Celery for Async:** Background ingestion, polling, webhooks, and maintenance tasks.
+1. **Per-Source Agents:** Each source (Jira, Confluence, File) is an independent module with its own adapter, chunker, pipeline, and Celery tasks. This enables source-specific optimization and independent scaling.
+
+2. **Source-Optimized Chunking:** 
+   - Confluence: Preserves `[Space > Ancestor > Page]` hierarchy for entity linking
+   - Jira: Preserves comment threading for relation extraction
+   - File: Respects document structure (sections, pages)
+   - Each source extracts its own entity relationships
+
+3. **Independent Celery Scheduling:**
+   - `jira_sync_project` → configurable interval (often 1 hour)
+   - `confluence_periodic_sync` → beat scheduler (60 min incremental)
+   - `file_process_upload` → immediate (queue=critical)
+   - Each agent controls its own cadence
+
+4. **PII Masking First:** GLiNER runs in `shared/pii_masker.py` — local, zero-egress, runs before Qdrant indexing.
+
+5. **Entity Extraction Per-Agent:** Each pipeline returns a graph of entities + relationships (e.g., Jira: issue→linked_issue, Confluence: page→linked_page). Frontend streams these nodes as they're extracted.
+
+6. **Real-Time Graph Streaming:** Via Redis pub/sub (`query_id → {nodes, edges}`) — frontend doesn't wait for full completion.
+
+7. **Redis Everywhere:** Cache, queues, session state, distributed locks, and pub/sub all via Redis.
+
+8. **Hybrid Retrieval (T1):** Dense (BGE-M3) + Sparse (BM25) via RRF — queries Qdrant.
 
 ---
 
@@ -439,29 +429,71 @@ POST /api/auth/logout
 └─ Backend invalidates refresh token in Redis
 ```
 
-### Query API
+### Agent Webhook Endpoints (Per-Source)
+
+```
+POST /webhooks/jira
+├─ Validates Jira webhook signature (X-Atlassian-Webhook-Signature)
+├─ Extracts issue_created, issue_updated, comment_created events
+├─ Routes to jira_process_issue Celery task (queue=critical)
+└─ Returns immediately (202 Accepted)
+
+POST /webhooks/confluence
+├─ Validates Confluence webhook signature
+├─ Extracts page_created, page_updated, page_trashed events
+├─ Routes to confluence_process_page Celery task (queue=critical)
+└─ Returns immediately (202 Accepted)
+
+POST /files/upload
+├─ Accepts multipart/form-data with file + team_id
+├─ Routes to file_process_upload Celery task (queue=critical)
+├─ Returns file_id immediately; processing async
+└─ Frontend polls /files/{file_id} for status
+
+POST /jira/sync/{project_key}
+├─ Manual trigger; requires admin role
+├─ Routes to jira_sync_project Celery task (queue=polling)
+└─ Returns job_id for polling
+
+POST /confluence/sync/{space_key}
+├─ Manual trigger; requires admin role
+├─ Routes to confluence_sync_space Celery task (queue=polling)
+└─ Returns job_id for polling
+```
+
+### Query API (Streaming)
 
 ```
 POST /api/query
 ├─ Request: { question, conversation_id?, filters?: { team_id, source_type } }
-├─ Response (Streaming): 
-│  ├─ event: "answer_started" → { id, timestamp }
-│  ├─ event: "answer_chunk" → { content } (streamed answer)
-│  ├─ event: "citations" → { sources: [{ title, url, score, chunk }] }
-│  ├─ event: "knowledge_graph" → { nodes, edges } (loads dynamically)
-│  ├─ event: "related_docs" → { documents: [...] }
-│  └─ event: "done" → { success: true }
+├─ Response (Streaming Server-Sent Events or WebSocket):
+│  ├─ event: "query_started" → { id, timestamp }
+│  ├─ event: "answer_chunk" → { content, tokens: 5 } (streamed LLM answer)
+│  ├─ event: "citations" → { sources: [{ title, uri, source_type, score, chunk }] }
+│  ├─ event: "graph_node" → { id, label, type, source_agent } (extracted entity)
+│  ├─ event: "graph_edge" → { source_id, target_id, relation } (entity relation)
+│  ├─ event: "related_docs" → { documents: [...] } (top-N retrieved docs)
+│  └─ event: "done" → { success: true, total_tokens: 42 }
 └─ On error: { success: false, error: "...", code: 400|500 }
 
 POST /api/query/{query_id}/follow-up
 ├─ Request: { follow_up_question }
-├─ Response: (same streaming format)
-└─ Appends to conversation history
+├─ Response: (same streaming format as /api/query)
+└─ Appends to conversation history in memory + PostgreSQL
 
 POST /api/query/{query_id}/feedback
-├─ Request: { sentiment: "helpful"|"not_helpful", text?: "..." }
+├─ Request: { sentiment: "helpful"|"not_helpful"|"hallucinated", text?: "..." }
 ├─ Response: { success: true }
-└─ Records feedback for analytics
+└─ Records feedback for analytics; triggers reranking if needed
+
+GET /api/graph/entities
+├─ Query: ?query_id=xxx&type=issue,page (optional filters)
+├─ Response: [{ id, label, type, source_agent, doc_count, related_entities: [...] }]
+
+GET /api/graph/query/{query_id}
+├─ Response: { nodes: [...], edges: [...], timestamp }
+└─ Useful for reviewing extracted graph after query completion
+```
 ```
 
 ### Analytics API

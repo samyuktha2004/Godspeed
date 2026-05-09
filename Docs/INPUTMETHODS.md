@@ -146,22 +146,21 @@ class NotionAdapter(BaseSourceAdapter):
 
 ---
 
-### 3.2 Confluence (Existing — Extended)
+### 3.2 Confluence (Implemented — Full Agent)
 
-**Status:** Implemented. See `04_integrations_and_tech_stack.md` for core details.
+**Status:** Fully implemented in `src/confluence_agent/`. Heading-based chunking with breadcrumbs, table extraction, incremental CQL sync, and webhook support.
+
+**What's built:**
+- `adapter.py` — `fetch_page`, `fetch_space`, `fetch_incremental` (CQL) via Confluence REST API
+- `chunker.py` — BeautifulSoup parses Confluence Storage Format; heading-split chunks prefixed with `[Space > Ancestor > Page]` breadcrumb; each table = 1 chunk
+- `pipeline.py` — `ingest_page` / `ingest_space` → chunk → GLiNER PII mask → BGE-M3 embed → Qdrant upsert (idempotent)
+- `router.py` — `POST /webhooks/confluence` (HMAC-SHA256 verified), `POST /confluence/sync/{space_key}`
+- Celery beat task: `confluence_periodic_sync` — incremental sync of all configured spaces every 60 min
 
 **Extension ideas:**
 - Page version history (show how docs evolved)
 - Comments as sub-chunks (discussion context)
 - Attachment metadata (PDFs logged as "available but not indexed yet")
-
-```python
-# src/adapters/confluence.py
-class ConfluenceAdapter(BaseSourceAdapter):
-    async def fetch_incremental(self, space_id, last_sync_at):
-        # Existing implementation
-        pass
-```
 
 ---
 
@@ -312,24 +311,21 @@ class SlackAdapter(BaseSourceAdapter):
 
 ---
 
-### 3.5 Jira (Existing — Extended)
+### 3.5 Jira (Implemented — Full Agent)
 
-**Status:** Partially implemented (basic issue indexing). Extend to linked entities and custom fields.
+**Status:** Fully implemented in `src/jira_agent/`. Real JQL pagination, ADF text extraction, comment chunking, webhook support.
+
+**What's built:**
+- `adapter.py` — `fetch_issue`, `fetch_all` (JQL cursor pagination), `fetch_incremental`; handles Atlassian Document Format (ADF) → plain text extraction
+- `chunker.py` — chunk 0: issue body (`key + summary + status + priority + description`); chunks 1..N: one per comment with author attribution
+- `pipeline.py` — `ingest_issue` / `ingest_project` → chunk → GLiNER PII mask → BGE-M3 embed → Qdrant upsert (idempotent)
+- `router.py` — `POST /webhooks/jira` (HMAC-SHA256 verified), `POST /jira/sync/{project_key}`
+- Celery tasks: `jira_process_issue` (queue=critical, webhook-triggered), `jira_sync_project` (queue=polling)
 
 **Extension ideas:**
 - Linked issues (create graph of "relates to", "blocks", "is blocked by")
 - Custom fields (e.g., SLA, priority, effort)
 - Issue transitions & status history (show how issues evolved)
-
-```python
-# src/adapters/jira.py
-class JiraAdapter(BaseSourceAdapter):
-    async def fetch_incremental(self, space_id, last_sync_at):
-        """space_id = Jira project key (e.g., "BACKEND", "INFRA")"""
-        # Existing: fetch closed/resolved issues only
-        # Extension: also fetch issue transitions since last_sync_at
-        pass
-```
 
 ---
 
@@ -455,28 +451,25 @@ async def slack_webhook(request: Request):
 
 ---
 
-### 4.3 Jira Webhooks (NEW)
+### 4.3 Jira Webhooks (IMPLEMENTED)
 
-**Status:** Design only. Trigger on issue created/updated/resolved.
+**Status:** Implemented in `src/jira_agent/router.py`.
 
-**Webhook payload:**
-```python
-# src/integrations/jira/webhooks.py
+- Endpoint: `POST /webhooks/jira`
+- Verification: `X-Hub-Signature: sha256=<hmac>` checked against `JIRA_WEBHOOK_SECRET`
+- Events handled: `jira:issue_created`, `jira:issue_updated`
+- On receipt: extracts `issue.key` → dispatches `jira_process_issue.delay(key)` on Celery `critical` queue → returns 200 immediately
+- Register in Jira Cloud admin → System → WebHooks → URL: `https://your-server.com/webhooks/jira`
 
-@router.post("/webhooks/jira")
-async def jira_webhook(request: Request):
-    payload = await request.json()
-    event_type = payload['webhookEvent']
-    issue = payload['issue']
-    
-    if event_type == 'jira:issue_updated':
-        await reindex_queue.add(JiraIssueReindexTask(
-            project_key=issue['key'].split('-')[0],
-            issue_id=issue['id']
-        ))
-    
-    return {"status": "ok"}
-```
+### 4.3a Confluence Webhooks (IMPLEMENTED)
+
+**Status:** Implemented in `src/confluence_agent/router.py`.
+
+- Endpoint: `POST /webhooks/confluence`
+- Verification: `X-Hub-Signature: sha256=<hmac>` checked against `CONFLUENCE_WEBHOOK_SECRET`
+- Events handled: `page_created`, `page_updated`
+- On receipt: extracts `page.id` + `space.key` → dispatches `confluence_process_page.delay(page_id, space_key)` on Celery `critical` queue → returns 200 immediately
+- Register in Confluence Cloud → General Config → Webhooks → URL: `https://your-server.com/webhooks/confluence`
 
 ---
 
@@ -858,9 +851,37 @@ Notes: {txn.get('notes', 'N/A')}
 
 One-off or user-initiated data ingestion.
 
-### 6.1 PDF Upload (Existing)
+### 6.1 File Upload — PDF, DOCX, CSV, XML, HTML, TXT (IMPLEMENTED)
 
-**Status:** Implemented. See `04_integrations_and_tech_stack.md`.
+**Status:** Fully implemented in `src/file_agent/`. Replaces and extends the basic PDF-only upload.
+
+**Supported formats:** `.pdf`, `.docx`, `.doc`, `.xml`, `.txt`, `.md`, `.csv`, `.xlsx`, `.xls`, `.html`, `.htm`
+
+**Endpoints:**
+- `POST /api/ingest/file` — upload a single file (multipart), dispatches `file_process_task` to Celery
+- `POST /api/ingest/folder` — queue all supported files under a given folder path
+
+**Pipeline per file:**
+```
+detect_format(path)
+  → parser dispatch (pdf / docx / xml / csv / html / text)
+  → chunk_file_content (word-window 400w for text; 1 chunk per table row)
+  → GLiNER PII mask
+  → BGE-M3 embed
+  → Qdrant upsert (idempotent by file name)
+```
+
+**Parsers (`src/file_agent/parsers/`):**
+| Format | Library | Notes |
+|--------|---------|-------|
+| PDF | pdfplumber | pytesseract OCR fallback when text < 50 chars per page |
+| DOCX | python-docx | paragraphs + table blocks |
+| XML | xml.etree | recursive node extraction with tag_path |
+| CSV/XLSX | pandas | each row = 1 chunk |
+| HTML | BeautifulSoup | heading sections + table blocks |
+| TXT/MD | built-in | word-window chunks |
+
+**File watcher:** `src/file_agent/watcher.py` — watchdog `Observer` watches `FILE_WATCH_FOLDER` and auto-dispatches on file create/modify.
 
 ---
 
@@ -909,9 +930,11 @@ async def ingest_text(
 
 ---
 
-### 6.3 CSV/Structured Data Import (NEW)
+### 6.3 CSV/Structured Data Import (IMPLEMENTED)
 
-**Status:** Design only. Bulk upload of records (orders, contacts, etc).
+**Status:** Implemented via `src/file_agent/` — `POST /api/ingest/file` handles CSV and XLSX. Each row becomes an individual chunk with column: value pairs, making rows individually retrievable.
+
+For bulk business-record imports (orders, contacts, products), use the file agent upload endpoint directly. Custom domain-specific enrichment (order IDs → entity extraction) is an extension point.
 
 **Endpoint:**
 ```python
@@ -1098,9 +1121,13 @@ BUSINESS_DATA_SYNC_INTERVAL_MINUTES=60  # How often to poll
 
 Handling images, scanned documents, and visual content.
 
-### 8.1 Image OCR & Analysis (NEW)
+### 8.1 Image OCR & Analysis (PARTIALLY IMPLEMENTED)
 
-**Status:** Design only. Use Claude's vision capabilities or open-source Tesseract.
+**Status:** OCR for scanned PDF pages is implemented in `src/file_agent/parsers/pdf.py`. Full image-file OCR (standalone JPG/PNG) and multimodal layout analysis remain design-only.
+
+**What's working:** When a PDF page has fewer than 50 chars of extracted text, the parser automatically falls back to `pytesseract` via a `pymupdf` pixmap at 200 DPI. This handles scanned PDFs transparently within the file ingestion pipeline.
+
+**Still design-only:** Standalone image uploads (`POST /api/ingest/image`), Claude vision analysis, document layout understanding.
 
 **Pattern:**
 ```python
@@ -1918,13 +1945,14 @@ webhooks:
 
 ## Summary: Integration Priorities & Roadmap
 
-| Phase | Sources | Key Features |
-|-------|---------|--------------|
-| **Phase 1 (Current)** | Notion, Confluence, GitHub, Jira, PDF, URL | Base adapter pattern, RawDocument model, generic ingestion pipeline |
-| **Phase 2 (Next)** | Slack, logs, error traces, metrics | Event-driven ingestion, real-time alerting, RBAC for chat |
-| **Phase 3** | Business data (sales, inventory, finance, supply chain) | ORM connectors, bulk sync, entity extraction for graph |
-| **Phase 4** | Multimodal (OCR, images, scanned docs) | Vision model integration, document layout analysis |
-| **Phase 5** | Knowledge graph materialization | Neo4j full implementation, graph-aware retrieval, cross-domain reasoning |
+| Phase | Sources | Key Features | Status |
+|-------|---------|--------------|--------|
+| **Phase 1** | Notion, Confluence, GitHub, Jira, PDF, URL | Base adapter pattern, RawDocument model, generic ingestion pipeline | ✅ Done |
+| **Phase 1b (NEW)** | Jira (full), Confluence (full), Files (PDF/DOCX/CSV/XML/HTML/TXT) | Real-time webhooks, heading-split chunking, breadcrumb context, OCR fallback, file watcher | ✅ Done — `src/jira_agent/`, `src/confluence_agent/`, `src/file_agent/` |
+| **Phase 2 (Next)** | Slack, logs, error traces, metrics | Event-driven ingestion, real-time alerting, RBAC for chat | 🔄 Design ready |
+| **Phase 3** | Business data (sales, inventory, finance, supply chain) | ORM connectors, bulk sync, entity extraction for graph | 🔄 Extensible |
+| **Phase 4** | Multimodal (OCR, images, scanned docs) | Vision model integration, document layout analysis | 🔄 PDF OCR partial |
+| **Phase 5** | Knowledge graph materialization | Neo4j full implementation, graph-aware retrieval, cross-domain reasoning | 🔄 To implement |
 
 ---
 
@@ -2187,16 +2215,19 @@ USER_AGENT=Godspeed-Bot/1.0
 # Start Redis
 redis-server
 
-# Start Celery worker (processes tasks)
-celery -A src.celery_app worker \
-  -Q critical,high,default,polling,webhooks \
+# Start Celery worker — use ingestion.jobs.celery_app for all agent tasks
+celery -A ingestion.jobs.celery_app worker \
+  -Q critical,default,polling \
   --loglevel=info
 
-# Start Beat scheduler (periodic tasks)
-celery -A src.celery_app beat --loglevel=info
+# Start Beat scheduler (confluence 60min sync + cag nightly at 02:00)
+celery -A ingestion.jobs.celery_app beat --loglevel=info
+
+# Start webhook + sync API (all 3 agent routers)
+uvicorn src.agents_app:app --port 8001 --reload
 
 # Monitor (optional, web UI)
-celery -A src.celery_app flower --port=5555
+celery -A ingestion.jobs.celery_app flower --port=5555
 ```
 
 ### 13.5 Complete Example Flow
