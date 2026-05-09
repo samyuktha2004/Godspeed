@@ -4,21 +4,19 @@ GitHub tools — discovery-first, markdown-only reads, paginated, rate-limit awa
 import os
 import httpx
 
-GH           = "https://api.github.com"
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-GITHUB_REPO  = os.environ.get("GITHUB_REPO", "")
+GH = "https://api.github.com"
 
 
 def _headers() -> dict:
     return {
-        "Authorization":        f"Bearer {GITHUB_TOKEN}",
+        "Authorization":        f"Bearer {os.environ.get('GITHUB_TOKEN', '')}",
         "Accept":               "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
 
 def _target(repo: str) -> str:
-    return repo or GITHUB_REPO
+    return repo or os.environ.get("GITHUB_REPO", "")
 
 
 def _rate_warn(resp: httpx.Response) -> str | None:
@@ -170,6 +168,31 @@ async def github_list_markdown_files(repo: str = "", folder: str = "") -> str:
     return f"[{t}] {len(items)} markdown file(s):\n" + "\n".join(f"• {i['path']}" for i in items)
 
 
+async def github_list_commits(repo: str = "", branch: str = "", page: int = 1) -> str:
+    t = _target(repo)
+    if not t: return "Provide repo as 'owner/repo' or set GITHUB_REPO."
+    params = {"per_page": 20, "page": page}
+    if branch:
+        params["sha"] = branch
+    async with httpx.AsyncClient(timeout=15) as h:
+        r = await h.get(f"{GH}/repos/{t}/commits", headers=_headers(), params=params)
+    if w := _rate_warn(r): return w
+    if r.status_code == 404: return f"Repo not found: {t}"
+    if r.status_code != 200: return f"GitHub error {r.status_code}: {r.text[:200]}"
+    commits = r.json()
+    if not commits: return "No commits found."
+    lines = []
+    for c in commits:
+        sha = c["sha"][:7]
+        msg = c["commit"]["message"].split("\n")[0][:80]
+        author = c["commit"]["author"]["name"]
+        date = c["commit"]["author"]["date"][:10]
+        lines.append(f"• {sha}  {date}  {author}: {msg}")
+    if len(commits) == 20:
+        lines.append(f"[Page {page} — call with page={page+1} for more]")
+    return "\n".join(lines)
+
+
 # ── Registry ───────────────────────────────────────────────────────────────────
 
 GITHUB_TOOL_FNS = {
@@ -179,6 +202,7 @@ GITHUB_TOOL_FNS = {
     "github_read_file":           github_read_file,
     "github_search_code":         github_search_code,
     "github_list_markdown_files": github_list_markdown_files,
+    "github_list_commits":        github_list_commits,
 }
 
 GITHUB_TOOLS = [
@@ -251,6 +275,19 @@ GITHUB_TOOLS = [
         ),
         "parameters": {"type": "object", "properties": {
             "repo":   {"type": "string"}, "folder": {"type": "string"},
+        }},
+    }},
+    {"type": "function", "function": {
+        "name": "github_list_commits",
+        "description": (
+            "List recent commits in a GitHub repo. "
+            "Use this when asked about recent changes, commit history, or who changed what. "
+            "Returns SHA, date, author, and commit message for each commit."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "repo":   {"type": "string", "description": "owner/repo"},
+            "branch": {"type": "string", "description": "Branch name, default is the repo default branch"},
+            "page":   {"type": "integer", "description": "Page number, default 1"},
         }},
     }},
 ]

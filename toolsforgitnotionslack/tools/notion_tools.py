@@ -3,15 +3,12 @@ Notion tools — search, read pages, list and query databases.
 """
 import os
 import httpx
-from dotenv import load_dotenv
-load_dotenv()
-NOTION_TOKEN = os.environ.get("NOTION_API_TOKEN", "")
-
-NOTION_HEADERS = {
-    "Authorization":  f"Bearer {NOTION_TOKEN}",
-    "Notion-Version": "2022-06-28",
-    "Content-Type":   "application/json",
-}
+def _notion_headers() -> dict:
+    return {
+        "Authorization":  f"Bearer {os.environ.get('NOTION_API_TOKEN', '')}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type":   "application/json",
+    }
 
 
 def _extract_rich_text(rt: list) -> str:
@@ -24,7 +21,7 @@ async def notion_search(query: str, filter_type: str = "") -> str:
         body["filter"] = {"value": filter_type, "property": "object"}
     async with httpx.AsyncClient(timeout=15) as h:
         r = await h.post("https://api.notion.com/v1/search",
-                         headers=NOTION_HEADERS, json=body)
+                         headers=_notion_headers(), json=body)
     if r.status_code != 200: return f"Notion error {r.status_code}: {r.text[:300]}"
     results = r.json().get("results", [])
     if not results: return "No Notion pages or databases found."
@@ -49,7 +46,7 @@ async def notion_read_page(page_id: str, max_blocks: int = 80) -> str:
     async with httpx.AsyncClient(timeout=15) as h:
         r = await h.get(
             f"https://api.notion.com/v1/blocks/{page_id}/children",
-            headers=NOTION_HEADERS,
+            headers=_notion_headers(),
             params={"page_size": max_blocks},
         )
     if r.status_code != 200: return f"Notion error {r.status_code}: {r.text[:300]}"
@@ -91,7 +88,7 @@ async def notion_list_databases(query: str = "") -> str:
     if query: body["query"] = query
     async with httpx.AsyncClient(timeout=15) as h:
         r = await h.post("https://api.notion.com/v1/search",
-                         headers=NOTION_HEADERS, json=body)
+                         headers=_notion_headers(), json=body)
     if r.status_code != 200: return f"Notion error {r.status_code}: {r.text[:300]}"
     results = r.json().get("results", [])
     if not results: return "No databases found."
@@ -112,7 +109,7 @@ async def notion_query_database(database_id: str, filter_property: str = "",
     async with httpx.AsyncClient(timeout=15) as h:
         r = await h.post(
             f"https://api.notion.com/v1/databases/{database_id}/query",
-            headers=NOTION_HEADERS, json=body,
+            headers=_notion_headers(), json=body,
         )
     if r.status_code != 200: return f"Notion error {r.status_code}: {r.text[:300]}"
     results = r.json().get("results", [])

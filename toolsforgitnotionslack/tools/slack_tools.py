@@ -4,11 +4,8 @@ Slack tools — search, history, threads, channel metadata.
 import os
 import httpx
 
-SLACK_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
-
-
 def _headers() -> dict:
-    return {"Authorization": f"Bearer {SLACK_TOKEN}"}
+    return {"Authorization": f"Bearer {os.environ.get('SLACK_BOT_TOKEN', '')}"}
 
 
 async def slack_list_channels(filter_name: str = "") -> str:
