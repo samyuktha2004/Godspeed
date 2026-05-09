@@ -31,14 +31,20 @@ ORDER BY from_name
 @router.websocket("/graph/stream")
 async def graph_stream(websocket: WebSocket):
     await websocket.accept()
-    driver = AsyncGraphDatabase.driver(
-        settings.neo4j_uri,
-        auth=(settings.neo4j_username, settings.neo4j_password),
-        max_connection_lifetime=1800,
-        connection_acquisition_timeout=30,
-        keep_alive=True,
-        liveness_check_timeout=10,
-    )
+    try:
+        driver = AsyncGraphDatabase.driver(
+            settings.neo4j_uri,
+            auth=(settings.neo4j_username, settings.neo4j_password),
+            max_connection_lifetime=1800,
+            connection_acquisition_timeout=30,
+            keep_alive=True,
+            liveness_check_timeout=10,
+        )
+    except Exception:
+        logger.exception("graph_stream: failed to create Neo4j driver")
+        await websocket.send_json({"event": "error", "message": "Cannot connect to graph database"})
+        await websocket.close()
+        return
     try:
         async with driver.session(database=settings.neo4j_database) as session:
             result = await session.run(_SNAPSHOT_QUERY)

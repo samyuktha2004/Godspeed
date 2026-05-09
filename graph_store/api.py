@@ -75,7 +75,16 @@ async def graph_ingest(request: GraphIngestRequest) -> dict:
             await upsert_chunk(_ChunkProxy(row), extraction, driver)
             ingested += 1
         except Exception:
-            logger.exception("graph/ingest: upsert failed for chunk_id=%s", row["chunk_id"])
+            from neo4j.exceptions import SessionExpired
+            logger.warning("graph/ingest: upsert failed for chunk_id=%s, resetting driver and retrying", row["chunk_id"])
+            try:
+                from graph_store.writer import close_driver
+                await close_driver()
+                driver = _get_driver()
+                await upsert_chunk(_ChunkProxy(row), extraction, driver)
+                ingested += 1
+            except Exception:
+                logger.exception("graph/ingest: retry also failed for chunk_id=%s", row["chunk_id"])
 
     return {"ingested": ingested}
 
