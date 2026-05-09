@@ -154,11 +154,11 @@ NOTION_TOOLS = [
         "description": (
             "Search Notion for pages and databases by keyword. "
             "Always call this FIRST to get page IDs before calling notion_read_page. "
-            "filter_type: 'page', 'database', or '' (both)."
+            "filter_type: 'page' or 'database'. Omit to search both."
         ),
         "parameters": {"type": "object", "required": ["query"], "properties": {
             "query":       {"type": "string"},
-            "filter_type": {"type": "string", "enum": ["page", "database", ""]},
+            "filter_type": {"type": "string", "enum": ["page", "database"]},
         }},
     }},
     {"type": "function", "function": {
