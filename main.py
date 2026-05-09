@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from agent.api import router as agent_router
 from graph_store.api import router as graph_router
+from graph_store.stream import router as graph_stream_router
 from ingestion.api import router as ingestion_router
 from src.confluence_agent.router import router as confluence_router
 from src.file_agent.router import router as file_router
@@ -33,6 +34,7 @@ app = FastAPI(
 app.include_router(agent_router)
 app.include_router(ingestion_router)
 app.include_router(graph_router)
+app.include_router(graph_stream_router)
 app.include_router(jira_router)
 app.include_router(confluence_router)
 app.include_router(file_router)
