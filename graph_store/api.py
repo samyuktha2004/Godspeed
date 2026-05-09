@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 
+from neo4j import AsyncGraphDatabase
 from fastapi import APIRouter, HTTPException
 
+from graph_store.config import settings
 from graph_store.models import GraphIngestRequest, GraphTraverseRequest
 
 logger = logging.getLogger(__name__)
@@ -11,23 +13,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/graph", tags=["graph"])
 
 
+def _fresh_driver():
+    return AsyncGraphDatabase.driver(
+        settings.neo4j_uri,
+        auth=(settings.neo4j_username, settings.neo4j_password),
+        max_connection_lifetime=300,
+        connection_acquisition_timeout=60,
+        keep_alive=True,
+    )
+
+
 @router.get("/nodes")
 async def graph_nodes(limit: int = 50) -> dict:
-    from graph_store.writer import get_driver
-    from graph_store.config import settings
-    driver = get_driver()
-    async with driver.session(database=settings.neo4j_database) as session:
-        result = await session.run(
-            "MATCH (n) WHERE NOT n:Chunk AND NOT n:Document RETURN labels(n)[0] AS label, n.name AS name LIMIT $limit",
-            limit=limit,
-        )
-        records = await result.data()
+    driver = _fresh_driver()
+    try:
+        async with driver.session(database=settings.neo4j_database) as session:
+            result = await session.run(
+                "MATCH (n) WHERE NOT n:Chunk AND NOT n:Document RETURN labels(n)[0] AS label, n.name AS name LIMIT $limit",
+                limit=limit,
+            )
+            records = await result.data()
+    finally:
+        await driver.close()
     return {"count": len(records), "nodes": records}
-
-
-def _get_driver():
-    from graph_store.writer import get_driver
-    return get_driver()
 
 
 @router.post("/ingest")
@@ -53,10 +61,8 @@ async def graph_ingest(request: GraphIngestRequest) -> dict:
     if not rows:
         return {"ingested": 0}
 
-    driver = _get_driver()
-    await ensure_indexes(driver)
-
     texts = [r["text"] for r in rows]
+    # Run Gemini extraction first (can take minutes) — driver created AFTER this
     extractions = await extract_batch(texts)
 
     class _ChunkProxy:
@@ -69,22 +75,19 @@ async def graph_ingest(request: GraphIngestRequest) -> dict:
             self.team_id = row["team_id"]
             self.chunk_index = row["chunk_index"]
 
-    ingested = 0
-    for row, extraction in zip(rows, extractions):
-        try:
-            await upsert_chunk(_ChunkProxy(row), extraction, driver)
-            ingested += 1
-        except Exception:
-            from neo4j.exceptions import SessionExpired
-            logger.warning("graph/ingest: upsert failed for chunk_id=%s, resetting driver and retrying", row["chunk_id"])
+    # Fresh driver opened AFTER extraction so the connection isn't idle during Gemini calls
+    driver = _fresh_driver()
+    try:
+        await ensure_indexes(driver)
+        ingested = 0
+        for row, extraction in zip(rows, extractions):
             try:
-                from graph_store.writer import close_driver
-                await close_driver()
-                driver = _get_driver()
                 await upsert_chunk(_ChunkProxy(row), extraction, driver)
                 ingested += 1
             except Exception:
-                logger.exception("graph/ingest: retry also failed for chunk_id=%s", row["chunk_id"])
+                logger.exception("graph/ingest: upsert failed for chunk_id=%s", row["chunk_id"])
+    finally:
+        await driver.close()
 
     return {"ingested": ingested}
 
@@ -97,15 +100,17 @@ async def graph_traverse(type: str, name: str, team_id: str) -> dict:
         traverse_from_service,
     )
 
-    driver = _get_driver()
-
-    if type == "incident":
-        texts = await traverse_from_incident(name, team_id, driver)
-    elif type == "service":
-        texts = await traverse_from_service(name, team_id, driver)
-    elif type == "library":
-        texts = await find_library_chunks(name, team_id, driver)
-    else:
-        raise HTTPException(status_code=400, detail="type must be incident, service, or library")
+    driver = _fresh_driver()
+    try:
+        if type == "incident":
+            texts = await traverse_from_incident(name, team_id, driver)
+        elif type == "service":
+            texts = await traverse_from_service(name, team_id, driver)
+        elif type == "library":
+            texts = await find_library_chunks(name, team_id, driver)
+        else:
+            raise HTTPException(status_code=400, detail="type must be incident, service, or library")
+    finally:
+        await driver.close()
 
     return {"type": type, "name": name, "team_id": team_id, "chunks": texts}
