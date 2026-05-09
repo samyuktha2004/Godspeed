@@ -226,10 +226,11 @@ async def upsert_chunk(chunk, extraction: ExtractionResult, driver: AsyncDriver)
             )
 
         for rel in extraction.relationships:
+            from_name = chunk.chunk_id if rel.from_label == "Chunk" else rel.from_name
             await _merge_relationship(
                 session,
                 from_label=rel.from_label,
-                from_name=rel.from_name,
+                from_name=from_name,
                 rel_type=rel.rel_type,
                 to_label=rel.to_label,
                 to_name=rel.to_name,

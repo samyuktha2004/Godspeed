@@ -90,6 +90,16 @@ async def graph_stream(websocket: WebSocket):
         logger.info("graph_stream: client disconnected")
     except Exception:
         logger.exception("graph_stream: error")
-        await websocket.send_json({"event": "error", "message": "Graph stream failed"})
+        try:
+            await websocket.send_json({"event": "error", "message": "Graph stream failed"})
+        except Exception:
+            pass
     finally:
-        await driver.close()
+        try:
+            await driver.close()
+        except Exception:
+            pass
+        try:
+            await websocket.close()
+        except Exception:
+            pass
