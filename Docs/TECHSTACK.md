@@ -50,9 +50,10 @@
 | Component | Technology | Rationale | Purpose |
 |---|---|---|---|
 | **Agent Framework** | LangGraph | Stateful graph execution; explicit node definitions; ReAct pattern built-in | Multi-agent coordination |
-| **LLM Integration** | LangChain + model-agnostic design | Unified interface for Claude (primary), OpenAI fallback, local Ollama support | Generator + Critic agents |
-| **Primary LLM** | Claude 3.5 Sonnet (Anthropic) | Best reasoning quality for validation; low hallucination rates (Stanford 2025 benchmark) | Generator + Critic |
-| **Secondary LLM** | Claude 3 Haiku | Cheap, fast inference for light tasks (summarization, classification) | CAG, categorization |
+| **LLM Integration** | langchain-google-genai | Unified Gemini interface via LangChain; all agents use Gemini models — no OpenAI dependency in production | Generator + Critic agents |
+| **Primary LLM** | Gemini 2.5 Pro (Google) | Used for planner, synthesiser, and CAG; long context window; best reasoning quality | Planner, Synthesiser (`PLANNER_MODEL`, `SYNTHESISER_MODEL`) |
+| **Fast LLM** | Gemini 2.5 Flash (Google) | Cheap, low-latency inference for light tasks | Summariser, Guardrail, Graph extraction (`SUMMARISER_MODEL`, `GUARDRAIL_MODEL`, `GRAPH_EXTRACTION_MODEL`) |
+| **Extraction LLM** | Gemini 2.5 Flash (Google) | Entity/relationship extraction from chunks at ingestion time; strict output schema | graph_store/extractor.py |
 | **Local LLM Fallback** | Ollama + Mistral-7B | For air-gapped deployments; lower quality but zero API dependency | HIPAA/FedRAMP compliance |
 
 ### Data Storage
@@ -61,6 +62,7 @@
 |---|---|---|---|
 | **Primary DB** | PostgreSQL 15+ | ACID guarantees; full-text search via pg_trgm; JSON support; RBAC audit tables | Metadata, audit trails, RBAC |
 | **Cache Layer** | Redis (self-hosted or Upstash) | Sub-millisecond reads; sorted sets for leaderboards; pub/sub for real-time notifications | Session state, caching |
+| **Knowledge Graph DB** | Neo4j (self-hosted) | Native graph traversal; Cypher query language; MERGE for idempotent upserts; indexes on chunk_id, doc_id, team_id | Entity/relationship graph, multi-hop traversal for context augmentation |
 | **Document Storage** | S3-compatible (AWS S3 or MinIO) | Durable long-term storage for PDFs, uploaded files, exports | PDFs, user uploads |
 | **Time-Series DB** (Phase 2) | TimescaleDB (PostgreSQL extension) | Query volume trends, latency metrics, user activity patterns; built on PostgreSQL | Analytics time-series |
 
@@ -134,8 +136,9 @@
 
 | Component | Technology | Rationale | Purpose |
 |---|---|---|---|
-| **WebSocket Client** | Native WebSocket API (no Socket.io for MVP) | Simpler, lower latency; backend controls connection lifecycle | Real-time alerts/notifications |
-| **Message Format** | JSON over WebSocket | Consistent with HTTP API; easy debugging; browser-native JSON.parse | Real-time updates |
+| **SSE (Server-Sent Events)** | Native `EventSource` / `fetch` with `text/event-stream` | Used for query streaming: `plan_ready`, `agent_started`, `agent_done`, `answer_chunk`, `done`, `error` — each event arrives as tokens stream from the LLM | Query result streaming from `POST /agent/query` |
+| **WebSocket Client** | Native WebSocket API (no Socket.io for MVP) | Two uses: (1) knowledge graph visualization — streams nodes/edges from `WS /graph/stream` as Neo4j traversal results arrive; (2) real-time system notifications | Graph visualization + alerts |
+| **Message Format** | JSON over SSE/WebSocket | SSE events: `data: {...}\n\n`; WebSocket: `{event, id, label, name}` / `{event, from, to, rel}` | Real-time updates |
 | **Reconnection** | Exponential backoff (client-side) | Handles network hiccups; prevents thundering herd on backend | Connection resilience |
 
 ### Build & Development
@@ -222,8 +225,8 @@
 | **BGE-M3** | Dense + Sparse embedding | Hugging Face (self-host) | 568M | Free |
 | **BGE-reranker-v2-m3** | Re-ranking | Hugging Face (self-host) | 1.2B | Free |
 | **GLiNER (base)** | PII detection | Hugging Face (self-host) | 333M | Free |
-| **Claude 3.5 Sonnet** | Generator + Critic LLM | Anthropic API | Hosted | $3/1M tokens input |
-| **Claude 3 Haiku** | Lightweight summarization | Anthropic API | Hosted | $0.80/1M tokens input |
+| **Gemini 2.5 Pro** | Planner + Synthesiser LLM | Google AI API (`GOOGLE_API_KEY`) | Hosted | Pay-per-token |
+| **Gemini 2.5 Flash** | Summariser + Guardrail + Graph extraction | Google AI API (`GOOGLE_API_KEY`) | Hosted | Pay-per-token (cheaper) |
 | **Mistral-7B** | Air-gapped fallback | Ollama (self-host) | 7B | Free (inference) |
 
 ### NLP Pipelines (Python)
@@ -270,7 +273,7 @@ docker-compose up -d  # Prod-grade docker-compose.yml with all services
 ### Target 3: Hybrid Air-Gapped (No External APIs)
 
 **Fallbacks:**
-- Ollama (Mistral-7B) instead of Claude API
+- Ollama (Mistral-7B) instead of Gemini API
 - Local embeddings (BGE-M3 on CPU or GPU)
 - Self-hosted Firecrawl instance (optional)
 - No external search (Tavily fallback disabled)
@@ -282,12 +285,13 @@ docker-compose up -d  # Prod-grade docker-compose.yml with all services
 ## Summary: MVP Tech Stack Checklist
 
 - [x] Backend: FastAPI + PostgreSQL + Redis + Qdrant
-- [x] LLM: Claude 3.5 Sonnet (primary) + Haiku (secondary)
+- [x] LLM: Gemini 2.5 Pro (planner + synthesiser) + Gemini 2.5 Flash (summariser + guardrail + graph extraction)
 - [x] Frontend: React 18 + TypeScript + Vite + shadcn/ui
 - [x] Ingestion: Docling + GLiNER + semantic chunking
 - [x] Retrieval: BGE-M3 + RRF + BGE-reranker-v2-m3
 - [x] Validation: Generator + Critic (LangGraph)
-- [x] Real-Time: WebSocket + Redis pub/sub
+- [x] Real-Time: SSE (query streaming) + WebSocket (graph visualization + notifications) + Redis pub/sub
+- [x] Knowledge Graph: Neo4j + Gemini 2.5 Pro extraction (graph_store/)
 - [x] Auth: JWT + httpOnly cookies
 - [x] Deployment: Docker + docker-compose (MVP) + Kubernetes (scale)
 
@@ -298,7 +302,6 @@ docker-compose up -d  # Prod-grade docker-compose.yml with all services
 - [ ] Monitoring: Prometheus + Grafana
 - [ ] Tracing: OpenTelemetry + Jaeger
 - [ ] Advanced Auth: OAuth2 + SSO (OIDC)
-- [ ] Knowledge Graph: Neo4j or Qdrant knowledge graph mode
 - [ ] Caching Strategy: Edge caching via CDN
 - [ ] Rate Limiting: Redis-based token bucket
-- [ ] Webhook Signing: HMAC for security
+- [x] Webhook Signing: HMAC-SHA256 (Slack, GitHub, Jira) — already implemented in src/integrations/webhooks.py

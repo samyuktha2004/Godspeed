@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
+from datetime import datetime
+from uuid import uuid4
+from src.utils.logger import Timer, get_logger as _get_logger
 from typing import AsyncGenerator
 
 from fastapi import APIRouter
@@ -13,9 +15,45 @@ from fastapi.responses import StreamingResponse
 from agent.graph import graph
 from agent.models import KnowledgeGraphState, QueryInput
 
-logger = logging.getLogger(__name__)
+logger = _get_logger(__name__)
 
 router = APIRouter(prefix="/agent", tags=["agent"])
+
+HISTORY_KEY = "gs:queries"
+TOPICS_KEY  = "gs:topics"
+
+
+async def _store_query_event(query_input: QueryInput, duration_ms: int, success: bool) -> None:
+    """Persist query event to Redis for analytics and workspace history."""
+    try:
+        import redis.asyncio as aioredis
+        from src.config import settings
+
+        event = {
+            "id":           str(uuid4()),
+            "query":        query_input.query,
+            "session_id":   query_input.session_id,
+            "team_id":      query_input.team_id,
+            "created_at":   datetime.utcnow().isoformat(),
+            "success":      success,
+            "duration_ms":  duration_ms,
+            "answer_brief": "",
+        }
+
+        r = aioredis.from_url(settings.redis_url, decode_responses=True)
+        try:
+            # Push to history list (newest first), keep last 1000
+            await r.lpush(HISTORY_KEY, json.dumps(event))
+            await r.ltrim(HISTORY_KEY, 0, 999)
+
+            # Track topic words (naive: split query into words, skip short ones)
+            for word in query_input.query.lower().split():
+                if len(word) > 4 and word.isalpha():
+                    await r.zincrby(TOPICS_KEY, 1, word)
+        finally:
+            await r.aclose()
+    except Exception as exc:
+        logger.warning("query_store_failed", extra={"error": str(exc)})
 
 
 async def _event_generator(
@@ -29,13 +67,23 @@ async def _event_generator(
             query_input=query_input,
             sse_queue=queue,
         )
-        try:
-            await graph.ainvoke(initial_state)
-        except Exception as exc:
-            logger.exception("Graph execution error for session=%s", query_input.session_id)
-            await queue.put({"event": "error", "data": {"message": str(exc)}})
-        finally:
-            await queue.put(_SENTINEL)
+        with Timer() as t:
+            try:
+                await graph.ainvoke(initial_state)
+                logger.info(
+                    "query_complete",
+                    extra={"session_id": query_input.session_id, "duration_ms": t.ms},
+                )
+                await _store_query_event(query_input, t.ms, success=True)
+            except Exception as exc:
+                logger.exception(
+                    "query_error",
+                    extra={"session_id": query_input.session_id, "duration_ms": t.ms, "error": str(exc)},
+                )
+                await _store_query_event(query_input, t.ms, success=False)
+                await queue.put({"event": "error", "data": {"message": str(exc)}})
+            finally:
+                await queue.put(_SENTINEL)
 
     task = asyncio.create_task(run_graph())
 
@@ -64,10 +112,12 @@ async def _event_generator(
 async def query_endpoint(query_input: QueryInput) -> StreamingResponse:
     queue: asyncio.Queue = asyncio.Queue()
     logger.info(
-        "query_endpoint: session=%s team=%s query=%r",
-        query_input.session_id,
-        query_input.team_id,
-        query_input.query,
+        "query_start",
+        extra={
+            "session_id": query_input.session_id,
+            "team_id":    query_input.team_id,
+            "query_len":  len(query_input.query),
+        },
     )
 
     return StreamingResponse(

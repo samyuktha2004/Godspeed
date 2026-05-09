@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* highlight.js theme — auto light/dark via CSS vars */
+@import 'highlight.js/styles/github.css' layer(base);
+
+@layer base {
+  :root {
+    --color-brand: theme('colors.brand.DEFAULT');
+  }
+
+  /* Smooth skeleton pulse */
+  @keyframes skeleton-shimmer {
+    0%   { opacity: 0.6; }
+    50%  { opacity: 1;   }
+    100% { opacity: 0.6; }
+  }
+
+  .skeleton {
+    animation: skeleton-shimmer 1.8s ease-in-out infinite;
+    @apply rounded bg-surface-subtle dark:bg-stone-800;
+  }
+
+  /* Code block copy button */
+  .code-block-wrapper {
+    @apply relative;
+  }
+  .code-block-wrapper .copy-btn {
+    @apply absolute right-2 top-2 hidden rounded px-2 py-1 text-xs
+           bg-stone-700 text-white opacity-70 hover:opacity-100;
+  }
+  .code-block-wrapper:hover .copy-btn {
+    @apply block;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+}

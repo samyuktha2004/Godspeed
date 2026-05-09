@@ -46,9 +46,10 @@
 │  └──────┬──────────────────────────────────────────────────────────┘      │
 │         │                                                                   │
 │  ┌──────▼────────────────────────────────────────────────────────┐        │
-│  │         Data Layer (PostgreSQL, Qdrant, Redis, S3)            │        │
+│  │     Data Layer (PostgreSQL, Qdrant, Neo4j, Redis, S3)         │        │
 │  │  ├─ PostgreSQL: Metadata, RBAC, audit trails, queries        │        │
 │  │  ├─ Qdrant: Vector embeddings (dense + sparse)              │        │
+│  │  ├─ Neo4j: Knowledge graph (Service/Library/Incident/Team)  │        │
 │  │  ├─ Redis: Cache, session state, pub/sub, task queues       │        │
 │  │  └─ S3: PDFs, user uploads, exports                          │        │
 │  └──────┬────────────────────────────────────────────────────────┘        │
@@ -99,7 +100,35 @@ This design ensures **scalability by source**, **operational clarity**, and **pr
 
 ### Directory Structure
 
+> **Note:** The actual repo layout diverges from early plans. The implemented structure is below. `src/query_engine/` and `src/retrieval/` referenced in earlier design docs do not exist — that logic lives in `agent/`. Graph endpoints live in `graph_store/`, not `src/api/graph.py`.
+
 ```
+agent/                          # LangGraph multi-agent query engine (IMPLEMENTED)
+├── api.py                      # POST /agent/query — SSE streaming endpoint
+├── graph.py                    # LangGraph build: planner → [doc_search|ticket_lookup|live_docs] → synthesiser → guardrail
+├── models.py                   # KnowledgeGraphState, QueryInput, ExecutionPlan, AgentResult, RetrievedChunk
+├── config.py                   # LLM + agent config
+├── prompts.py                  # Prompt templates
+├── agents/
+│   ├── planner.py              # Breaks query into AgentTask list
+│   ├── synthesiser.py          # Streams answer tokens from top chunks
+│   ├── guardrail.py            # Validates answer against sources; sets escalate flag
+│   └── _gemini.py              # Gemini client helper (used in planner/synthesiser)
+└── tools/
+    ├── doc_search.py           # Qdrant hybrid dense+sparse search
+    ├── ticket_lookup.py        # Jira-specific retrieval
+    ├── live_docs.py            # Firecrawl real-time doc fetching
+    └── summariser.py           # Context compression before synthesis
+
+graph_store/                    # Neo4j knowledge graph (IMPLEMENTED)
+├── api.py                      # GET /graph/nodes, POST /graph/ingest, GET /graph/traverse
+├── stream.py                   # WS /graph/stream — streams nodes+edges with 50ms delay
+├── extractor.py                # Gemini 2.5 Pro entity+relationship extraction (4 types, whitelist rels)
+├── writer.py                   # Async Neo4j MERGE upserts, index creation
+├── reader.py                   # Cypher traversal: incident→service→library→chunks
+├── models.py                   # ExtractedEntity, ExtractedRelationship, ExtractionResult
+└── config.py                   # Neo4j connection settings
+
 src/
 ├── agents_app.py               # Combined FastAPI app: all agent routers + Qdrant/Redis init
 │
@@ -332,10 +361,11 @@ frontend/
 │   │   └── ErrorPage.tsx       # Error boundary
 │   │
 │   ├── hooks/                  # Custom React hooks
-│   │   ├── useQuery.ts         # Query search hook
+│   │   ├── useSSEStream.ts     # SSE consumer for POST /agent/query — manages fetch + ReadableStream parsing
+│   │   ├── useGraphStream.ts   # WebSocket consumer for WS /graph/stream — feeds Force-Graph 2D progressively
+│   │   ├── useNotifications.ts # WebSocket consumer for WS /ws system notifications (future)
 │   │   ├── useAnalytics.ts     # Fetch analytics data
 │   │   ├── useAuth.ts          # Authentication state
-│   │   ├── useWebSocket.ts     # Real-time alerts
 │   │   ├── useTheme.ts         # Dark mode toggle
 │   │   ├── useLocalStorage.ts  # Persist state to localStorage
 │   │   ├── usePagination.ts    # Pagination logic
@@ -461,39 +491,45 @@ POST /confluence/sync/{space_key}
 └─ Returns job_id for polling
 ```
 
-### Query API (Streaming)
+### Query API (Streaming SSE)
 
 ```
-POST /api/query
-├─ Request: { question, conversation_id?, filters?: { team_id, source_type } }
-├─ Response (Streaming Server-Sent Events or WebSocket):
-│  ├─ event: "query_started" → { id, timestamp }
-│  ├─ event: "answer_chunk" → { content, tokens: 5 } (streamed LLM answer)
-│  ├─ event: "citations" → { sources: [{ title, uri, source_type, score, chunk }] }
-│  ├─ event: "graph_node" → { id, label, type, source_agent } (extracted entity)
-│  ├─ event: "graph_edge" → { source_id, target_id, relation } (entity relation)
-│  ├─ event: "related_docs" → { documents: [...] } (top-N retrieved docs)
-│  └─ event: "done" → { success: true, total_tokens: 42 }
-└─ On error: { success: false, error: "...", code: 400|500 }
-
-POST /api/query/{query_id}/follow-up
-├─ Request: { follow_up_question }
-├─ Response: (same streaming format as /api/query)
-└─ Appends to conversation history in memory + PostgreSQL
+POST /agent/query
+├─ Request: { query: string, team_id: string, session_id: string }
+├─ Response: Content-Type: text/event-stream
+│  ├─ event: plan_ready        → { tasks: [AgentTask], reasoning: string }
+│  ├─ event: agent_started     → { agent: "doc_search"|"ticket_lookup"|"live_docs"|"summariser" }
+│  ├─ event: agent_done        → { agent: string, chunks: [RetrievedChunk], confidence: "high"|"medium"|"low" }
+│  ├─ event: synthesis_started → {}
+│  ├─ event: answer_chunk      → { chunk: string }   (repeats, one per token)
+│  ├─ event: guardrail_result  → { score: float, escalate: bool }
+│  ├─ event: done              → {}
+│  └─ event: error             → { message: string }
+└─ Headers: Cache-Control: no-cache, X-Accel-Buffering: no
 
 POST /api/query/{query_id}/feedback
-├─ Request: { sentiment: "helpful"|"not_helpful"|"hallucinated", text?: "..." }
-├─ Response: { success: true }
-└─ Records feedback for analytics; triggers reranking if needed
-
-GET /api/graph/entities
-├─ Query: ?query_id=xxx&type=issue,page (optional filters)
-├─ Response: [{ id, label, type, source_agent, doc_count, related_entities: [...] }]
-
-GET /api/graph/query/{query_id}
-├─ Response: { nodes: [...], edges: [...], timestamp }
-└─ Useful for reviewing extracted graph after query completion
+├─ Request: { sentiment: "helpful"|"not_helpful"|"hallucinated", text?: string }
+└─ Response: { success: true }
 ```
+
+### Knowledge Graph API
+
+```
+GET /graph/nodes?limit=50
+└─ Response: { count: int, nodes: [{ label: string, name: string }] }
+   (excludes Chunk and Document nodes — returns Service/Library/Incident/Team only)
+
+POST /graph/ingest
+├─ Request: { chunk_ids: [string], team_id: string }
+└─ Response: { ingested: int }
+   (fetches chunks from Supabase, runs Gemini extraction, upserts to Neo4j)
+
+GET /graph/traverse?type=incident|service|library&name=string&team_id=string
+└─ Response: { type, name, team_id, chunks: [string] }
+   (multi-hop Cypher traversal — returns text chunks for context augmentation)
+
+WS /graph/stream
+└─ Streams: node events, edge events, then done event (see Real-Time API above)
 ```
 
 ### Analytics API
@@ -580,17 +616,116 @@ GET /api/admin/api-keys
 ├─ Response: [{ name, created_at, last_used, permissions }]
 ```
 
-### Real-Time API (WebSocket)
+### Bash Development Testing
 
+Use these instead of Swagger UI when you need to test streaming behaviour from the terminal.
+
+**Test SSE query stream (replaces Swagger — Swagger can't stream SSE):**
+```bash
+#!/usr/bin/env bash
+# test_query.sh — streams the SSE response token-by-token to stdout
+
+BASE_URL="${GODSPEED_API:-http://localhost:8000}"
+
+curl -N -s \
+  -X POST "${BASE_URL}/agent/query" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"What is the auth service?","team_id":"team-1","session_id":"test-001"}' \
+| while IFS= read -r line; do
+    echo "$line"
+  done
 ```
-ws://backend/ws
 
-Connected client receives:
-├─ event: "query_answered" → { query_id, new_docs_count } (when past query has new answers)
-├─ event: "escalation_spike" → { topic, spike_rate } (manager-only)
-├─ event: "breaking_change" → { dependency, version, url } (admin-only)
-├─ event: "data_sync_failed" → { source, error } (admin-only)
-└─ event: "knowledge_gap" → { topic, query_count } (all users)
+**Test graph REST endpoints:**
+```bash
+BASE_URL="${GODSPEED_API:-http://localhost:8000}"
+
+# List all graph nodes
+curl -s "${BASE_URL}/graph/nodes?limit=20" | python3 -m json.tool
+
+# Traverse from a service
+curl -s "${BASE_URL}/graph/traverse?type=service&name=auth-service&team_id=team-1" \
+  | python3 -m json.tool
+
+# Ingest chunks into graph
+curl -s -X POST "${BASE_URL}/graph/ingest" \
+  -H "Content-Type: application/json" \
+  -d '{"chunk_ids":["chunk-abc123"],"team_id":"team-1"}' \
+  | python3 -m json.tool
+```
+
+**Test WebSocket graph stream (requires `wscat` — install with `npm i -g wscat`):**
+```bash
+BASE_URL="${GODSPEED_WS:-ws://localhost:8000}"
+wscat -c "${BASE_URL}/graph/stream"
+# Prints node/edge/done events as they arrive
+```
+
+**Test Jira webhook signature (bash + openssl):**
+```bash
+BASE_URL="${GODSPEED_API:-http://localhost:8000}"
+BODY='{"webhookEvent":"jira:issue_created","issue":{"id":"TEST-1","fields":{"summary":"Auth service down"}}}'
+SECRET="your_jira_webhook_secret"
+SIG="sha256=$(echo -n "${BODY}" | openssl dgst -sha256 -hmac "${SECRET}" | awk '{print $2}')"
+
+curl -s -X POST "${BASE_URL}/webhooks/jira" \
+  -H "Content-Type: application/json" \
+  -H "X-Atlassian-Webhook-Signature: ${SIG}" \
+  -d "${BODY}"
+```
+
+**Test file upload:**
+```bash
+BASE_URL="${GODSPEED_API:-http://localhost:8000}"
+curl -s -X POST "${BASE_URL}/files/upload" \
+  -F "file=@/path/to/doc.pdf" \
+  -F "team_id=team-1"
+```
+
+---
+
+### Real-Time API
+
+There are two distinct real-time channels — do not conflate them:
+
+**Channel 1: Query streaming (SSE)**
+```
+POST /agent/query   →   Content-Type: text/event-stream
+
+Emits events in order:
+  event: plan_ready        data: { tasks: [...], reasoning: "..." }
+  event: agent_started     data: { agent: "doc_search" }
+  event: agent_done        data: { agent: "doc_search", chunks: [...], confidence: "high" }
+  event: synthesis_started data: {}
+  event: answer_chunk      data: { chunk: "token text" }   ← repeats per token
+  event: guardrail_result  data: { score: 0.92, escalate: false }
+  event: done              data: {}
+  event: error             data: { message: "..." }        ← on failure
+
+Request body: { query: string, team_id: string, session_id: string }
+```
+
+**Channel 2: Knowledge graph visualization (WebSocket)**
+```
+WS /graph/stream
+
+Emits in order (50ms delay between each):
+  { event: "node", id: "...", label: "Service", name: "auth-service" }
+  { event: "edge", from: "...", to: "...", rel: "DEPENDS_ON" }
+  ...
+  { event: "done", nodes_count: 42, edges_count: 87 }
+```
+
+**Channel 3: System notifications (WebSocket)**
+```
+WS /ws   (future — not yet implemented)
+
+Will emit:
+  event: "query_answered"  → { query_id, new_docs_count }
+  event: "escalation_spike" → { topic, spike_rate }         (manager-only)
+  event: "breaking_change"  → { dependency, version, url }  (admin-only)
+  event: "data_sync_failed" → { source, error }             (admin-only)
+  event: "knowledge_gap"    → { topic, query_count }        (all users)
 ```
 
 ---
@@ -601,27 +736,28 @@ Connected client receives:
 
 ```
 1. Engineer types query in SearchBox
-   ├─ frontend sends POST /api/query
+   ├─ frontend sends POST /agent/query { query, team_id, session_id }
+   └─ frontend simultaneously opens WS /graph/stream for parallel graph rendering
 
-2. Backend receives query
-   ├─ Validates RBAC (which docs can user access?)
-   ├─ Generates embedding via BGE-M3
-   ├─ Hybrid search: Dense (HNSW) + Sparse (BM25) → RRF → Top 50
-   ├─ Re-ranks Top 50 → Top 5 via BGE-reranker-v2-m3
-   ├─ Compresses 5 chunks → fits in LLM context
-   └─ Streams answer chunks to frontend (event: "answer_chunk")
+2. Backend receives query via SSE stream
+   ├─ LangGraph planner breaks query into AgentTask list → emits plan_ready
+   ├─ Each agent runs (doc_search / ticket_lookup / live_docs) → emits agent_started + agent_done
+   ├─ doc_search: BGE-M3 embed → Qdrant hybrid search (dense+sparse RRF) → top 50 → BGE reranker → top 5
+   ├─ Synthesiser streams answer tokens → emits answer_chunk per token
+   └─ Guardrail validates answer against source chunks → emits guardrail_result
 
-3. Backend validates answer
-   ├─ Generator Agent created answer
-   ├─ Critic Agent validates against sources
-   ├─ If hallucination detected → warning banner
-   └─ Streams citations (event: "citations")
+3. Guardrail result
+   ├─ guardrail_passed=true → done event
+   ├─ guardrail_passed=false + escalate=true → warning banner shown in frontend
+   └─ Citations come from agent_done chunks (already streamed in step 2)
 
-4. Backend extracts entities + builds knowledge graph
-   ├─ GLiNER extracts entities from answer
-   ├─ Queries Qdrant for related entities
-   ├─ Streams graph nodes/edges as they connect
-   └─ Event: "knowledge_graph" with { nodes, edges }
+4. Frontend connects to graph stream (parallel to query SSE)
+   ├─ WS /graph/stream streams the pre-built Neo4j graph (query-scoped subgraph)
+   ├─ Nodes arrive one-by-one with 50ms delays: { event:"node", label, name }
+   ├─ Edges arrive after nodes: { event:"edge", from, to, rel }
+   └─ { event:"done" } signals completion
+   Note: The knowledge graph is pre-built at ingestion time by Gemini 2.5 Pro
+   (graph_store/extractor.py), not extracted from the answer at query time.
 
 5. Frontend receives stream
    ├─ Displays answer immediately (no waiting)
@@ -754,13 +890,24 @@ services:
     environment:
       VITE_API_BASE_URL: http://localhost:8000
 
+  neo4j:
+    image: neo4j:5
+    ports: ["7474:7474", "7687:7687"]
+    volumes: [./data/neo4j:/data]
+    environment:
+      NEO4J_AUTH: neo4j/godspeed_dev
+      NEO4J_PLUGINS: '["apoc"]'
+
   celery:
     build: ./backend
-    command: celery -A celery_app worker -l info
-    depends_on: [postgres, redis, qdrant]
+    command: celery -A src.celery_app worker -Q critical,default,polling -l info
+    depends_on: [postgres, redis, qdrant, neo4j]
     environment:
       SQLALCHEMY_DATABASE_URL: postgresql://user:pass@postgres:5432/godspeed
       REDIS_URL: redis://redis:6379
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: godspeed_dev
 ```
 
 ### Production (Kubernetes)

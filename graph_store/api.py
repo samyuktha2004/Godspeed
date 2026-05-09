@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from src.utils.logger import Timer, get_logger as _get_logger
 import logging
 
 from neo4j import AsyncGraphDatabase
@@ -8,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from graph_store.config import settings
 from graph_store.models import GraphIngestRequest, GraphTraverseRequest
 
-logger = logging.getLogger(__name__)
+logger = _get_logger(__name__)
 
 router = APIRouter(prefix="/graph", tags=["graph"])
 
@@ -26,15 +27,17 @@ def _fresh_driver():
 @router.get("/nodes")
 async def graph_nodes(limit: int = 50) -> dict:
     driver = _fresh_driver()
-    try:
-        async with driver.session(database=settings.neo4j_database) as session:
-            result = await session.run(
-                "MATCH (n) WHERE NOT n:Chunk AND NOT n:Document RETURN labels(n)[0] AS label, n.name AS name LIMIT $limit",
-                limit=limit,
-            )
-            records = await result.data()
-    finally:
-        await driver.close()
+    with Timer() as t:
+        try:
+            async with driver.session(database=settings.neo4j_database) as session:
+                result = await session.run(
+                    "MATCH (n) WHERE NOT n:Chunk AND NOT n:Document RETURN labels(n)[0] AS label, n.name AS name LIMIT $limit",
+                    limit=limit,
+                )
+                records = await result.data()
+        finally:
+            await driver.close()
+    logger.info("graph_nodes", extra={"count": len(records), "duration_ms": t.ms})
     return {"count": len(records), "nodes": records}
 
 
@@ -55,7 +58,7 @@ async def graph_ingest(request: GraphIngestRequest) -> dict:
         )
         rows = result.data or []
     except Exception:
-        logger.exception("graph/ingest: Supabase fetch failed")
+        logger.exception("graph_ingest_supabase_error", extra={"chunk_ids": request.chunk_ids[:5]})
         raise HTTPException(status_code=502, detail="Failed to fetch chunks from Supabase")
 
     if not rows:
@@ -89,6 +92,7 @@ async def graph_ingest(request: GraphIngestRequest) -> dict:
     finally:
         await driver.close()
 
+    logger.info("graph_ingest_done", extra={"ingested": ingested, "total": len(rows)})
     return {"ingested": ingested}
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from src.utils.logger import get_logger as _get_logger
 import logging
 import os
 import shutil
@@ -13,7 +14,7 @@ from pydantic import BaseModel
 from src.file_agent.config import file_config
 from src.file_agent.tasks import file_process_task
 
-logger = logging.getLogger(__name__)
+logger = _get_logger(__name__)
 router = APIRouter(tags=["file"])
 
 _SUPPORTED_EXTENSIONS = {
@@ -41,8 +42,12 @@ async def ingest_file(
     try:
         shutil.copyfileobj(file.file, tmp)
         tmp.close()
+        size_kb = round(tmp.seek(0, 2) / 1024, 1) if not tmp.closed else 0
         task = file_process_task.delay(tmp.name, team_id or file_config.team_id)
-        logger.info("file_router: queued task %s for uploaded file %s", task.id, file.filename)
+        logger.info(
+            "file_ingest_queued",
+            extra={"task_id": task.id, "filename": file.filename, "suffix": suffix, "size_kb": size_kb},
+        )
         return {"status": "accepted", "task_id": task.id, "filename": file.filename}
     except Exception as exc:
         os.unlink(tmp.name)

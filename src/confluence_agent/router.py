@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from src.utils.logger import get_logger as _get_logger
 import logging
 from typing import Any
 
@@ -10,7 +11,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from src.confluence_agent.config import confluence_config
 from src.confluence_agent.tasks import confluence_process_page, confluence_sync_space
 
-logger = logging.getLogger(__name__)
+logger = _get_logger(__name__)
 router = APIRouter(tags=["confluence"])
 
 
@@ -30,6 +31,7 @@ async def confluence_webhook(
 
     if confluence_config.confluence_webhook_secret:
         if not _verify_confluence_signature(body, x_hub_signature, confluence_config.confluence_webhook_secret):
+            logger.warning("confluence_webhook_bad_signature", extra={"path": "/webhooks/confluence"})
             raise HTTPException(status_code=401, detail="Invalid Confluence webhook signature")
 
     payload = await request.json()
@@ -46,12 +48,12 @@ async def confluence_webhook(
         raise HTTPException(status_code=400, detail="Missing page.id in payload")
 
     task = confluence_process_page.delay(page_id, space_key, confluence_config.team_id)
-    logger.info("confluence_webhook: queued task %s for page %s", task.id, page_id)
+    logger.info("confluence_webhook_accepted", extra={"task_id": task.id, "page_id": page_id, "event": event})
     return {"status": "accepted", "task_id": task.id, "page_id": page_id}
 
 
 @router.post("/confluence/sync/{space_key}")
 async def trigger_confluence_sync(space_key: str) -> dict[str, Any]:
     task = confluence_sync_space.delay(space_key, confluence_config.team_id)
-    logger.info("confluence_sync: triggered full sync for space %s, task %s", space_key, task.id)
+    logger.info("confluence_sync_triggered", extra={"task_id": task.id, "space_key": space_key})
     return {"status": "accepted", "task_id": task.id, "space_key": space_key}

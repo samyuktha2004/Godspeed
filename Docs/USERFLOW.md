@@ -8,11 +8,12 @@
 
 1. [User Roles & Personas](#user-roles--personas)
 2. [Engineer User Flow (Primary)](#engineer-user-flow-primary)
-3. [Manager User Flow (Analytics)](#manager-user-flow-analytics)
-4. [Admin User Flow (Configuration)](#admin-user-flow-configuration)
-5. [Cross-Role Features](#cross-role-features)
-6. [Real-Time Features](#real-time-features)
-7. [Error Handling & Edge Cases](#error-handling--edge-cases)
+3. [New Hire / Intern / Apprentice User Flow](#new-hire--intern--apprentice-user-flow)
+4. [Manager User Flow (Analytics)](#manager-user-flow-analytics)
+5. [Admin User Flow (Configuration)](#admin-user-flow-configuration)
+6. [Cross-Role Features](#cross-role-features)
+7. [Real-Time Features](#real-time-features)
+8. [Error Handling & Edge Cases](#error-handling--edge-cases)
 
 ---
 
@@ -51,6 +52,25 @@
 - View knowledge health dashboard
 - See escalation trends and hotspots
 - Export reports for executives
+
+---
+
+### Role 2b: New Hire / Intern / Apprentice (subset of Engineer role)
+
+**Who they are:** Developers who are new to the company — this includes full-time new hires in their first 1–4 weeks, summer interns, and apprentices on structured programmes. They hold the Engineer role in the system but their UX is differentiated because they have no query history, no familiarity with the team's terminology, and often don't know what questions to ask yet.
+
+**Key Pain Points:**
+- Don't know what they don't know — can't form good search queries yet
+- Overwhelmed by the number of tools, repos, and processes
+- Afraid to "bother" senior engineers with basic questions
+- Don't know which team owns which service
+- Need to read a lot of docs fast in their first week
+
+**Permissions:** Same as Engineer (RBAC-filtered to their assigned team)
+
+**Differentiated UX triggers:**
+- Account is flagged `is_new_hire: true` (cleared after 30 days or manually by manager)
+- Zero query history in the system (auto-detects first-time state)
 
 ---
 
@@ -97,17 +117,18 @@ Entry Point: Visit app.godspeed.local/ after SSO login
     │
     ▼ [User types query + hits Enter]
     │
-[Results Page - Progressive Loading]
+[Results Page - Progressive Rendering]
 ├─ Search bar (reusable, with clear button)
-├─ Loading skeleton:
-│  ├─ [Spinner] Searching knowledge base...
-│  ├─ [Spinner] Generating answer...
-│  └─ [Spinner] Building knowledge graph (loads dynamically)
-├─ As results arrive, populate incrementally:
-│  ├─ 1st: Generated answer (with inline citations)
-│  ├─ 2nd: Knowledge graph (starts rendering as first node connection established)
-│  ├─ 3rd: Related documents (top 10 source chunks)
-│  └─ 4th: Query suggestions (similar past queries)
+├─ Loading skeleton (shown ONLY until the first event from either stream arrives):
+│  └─ Single pulsing skeleton placeholder — disappears the moment first data lands
+│     (first SSE event from /agent/query  OR  first node from /graph/stream)
+│     Condition: if ANY data has arrived, show it — never switch back to skeleton
+├─ Once first event arrives, populate in-place without page switch or reload:
+│  ├─ Answer area: tokens stream in word-by-word as SSE answer_chunk events arrive
+│  ├─ Knowledge graph canvas: nodes appear one-by-one as WS node events arrive
+│  │   (graph starts rendering from the first node — no wait for full graph)
+│  ├─ Related documents: populated after agent_done events complete
+│  └─ Query suggestions: appended last, after done event fires
 ├─ For each result chunk:
 │  ├─ Title + source badge (Notion / Confluence / GitHub / PDF / URL)
 │  ├─ Last updated timestamp (e.g., "Updated 2 days ago")
@@ -181,6 +202,165 @@ Entry Point: Sidebar > "Query History" or Cmd+Shift+H
 ├─ Load previous conversation with updated answer
 ├─ Highlight what changed since last run
 └─ Option to branch to follow-up
+```
+
+---
+
+## New Hire / Intern / Apprentice User Flow
+
+> These flows apply when `is_new_hire: true` OR the account has zero query history. The system detects first-time state automatically and downgrades the experience to guided mode. It never assumes prior familiarity with the team's codebase, terminology, or processes.
+
+### Flow 4a: Day-One Onboarding (First Login)
+
+```
+Entry Point: Invitation email → "Activate account" link → First login
+    │
+    ▼
+[Account Activation]
+├─ Set password (or SSO — OIDC if configured)
+├─ Choose display name
+└─ Team auto-assigned by admin at invite time
+    │
+    ▼
+[Welcome Screen — Onboarding Mode]
+├─ Header: "Welcome to Godspeed, [Name] 👋"
+├─ Subtitle: "Your team's knowledge base. Ask anything, get cited answers."
+├─ Team context card:
+│  ├─ "You've joined: [Backend Team]"
+│  ├─ "Your team works with: [Service list from team's Neo4j nodes]"
+│  └─ "Common topics your teammates ask about: [top 5 query topics for this team]"
+├─ [Start guided tour — 3 steps] (dismissible)
+└─ [Skip to search]
+    │
+    ▼ [User clicks "Start guided tour"]
+    │
+[Step 1 of 3: What this is]
+├─ Overlay on search box:
+│  "Ask any engineering question — about our codebase, runbooks, incidents, or docs."
+│  Example: "How does the auth service handle token expiry?"
+└─ [Next →]
+    │
+    ▼
+[Step 2 of 3: How answers work]
+├─ Overlay on a sample result:
+│  "Every answer shows exactly which document it came from.
+│   If you're unsure, click the citation to read the source."
+└─ [Next →]
+    │
+    ▼
+[Step 3 of 3: The knowledge graph]
+├─ Overlay on graph canvas:
+│  "This shows how services, libraries, and incidents connect.
+│   Click any node to explore related docs."
+└─ [Done — start searching]
+    │
+    ▼
+[Onboarding Dashboard — Home Page in New-Hire Mode]
+├─ Starter Pack panel (replaces trending queries):
+│  ├─ "Get started with questions your team asks in week 1:"
+│  ├─ [ ] How do I set up my local dev environment?
+│  ├─ [ ] What services does [team name] own?
+│  ├─ [ ] Where are the runbooks for on-call?
+│  ├─ [ ] How does deployment work here?
+│  └─ [ ] Who do I contact for access to [X]?
+│     (Clicking any of these fires it as a real query)
+├─ Your mentor: [Name, assigned by manager] — "[Message]" button
+├─ Useful links (admin-configured per team):
+│  ├─ Team Confluence space
+│  ├─ On-call runbook
+│  └─ Engineering handbook
+└─ Progress tracker: "You've asked [0] questions this week"
+```
+
+### Flow 4b: First Query (New Hire Context)
+
+```
+[Home or Search]
+    │
+    ▼ [User types first query — possibly vague or misspelled]
+    │
+[Query Processing]
+├─ Same SSE/streaming backend as standard Engineer flow
+├─ If query is very short (< 3 words) AND is_new_hire:
+│  └─ Frontend appends context hint below search box:
+│     "💡 Try being more specific, e.g. 'How does X work in our codebase?'"
+│     (Non-blocking — query still fires)
+    │
+    ▼ [Results Page — New-Hire augmentation]
+    │
+[Results — New Hire Extras]
+├─ Standard progressive rendering (same as Engineer flow)
+├─ After answer loads: "New to this topic?" expandable card:
+│  ├─ "Related starter questions:"
+│  ├─ [Suggested follow-up 1]  [Suggested follow-up 2]
+│  └─ "Ask your mentor: [Name]"
+├─ If answer has guardrail_result.escalate=true:
+│  └─ Banner: "This is a complex topic — consider asking [mentor name] directly."
+│     (Escalation banner personalised with mentor name for new hires)
+└─ Standard feedback buttons (thumbs up/down)
+    │
+    ▼ [Optional: User clicks "Ask your mentor"]
+    │
+[Mentor Nudge]
+├─ Pre-filled message: "I asked Godspeed about '[query text]' — can you help me understand it better?"
+└─ Opens in whatever comms tool is configured (Slack deep link / mailto fallback)
+```
+
+### Flow 4c: Onboarding Progress (First Two Weeks)
+
+```
+[Home Page — New-Hire Mode, days 1–14]
+    │
+├─ Progress tracker updates after each query:
+│  ├─ Week 1 goal: "Ask 10 questions" → [████░░░░░░] 4/10
+│  ├─ Topics explored: [Auth] [Deployments] [Databases] (badges)
+│  └─ "You've saved 2h of context-switching this week" (derived from query count × avg resolution time)
+│
+├─ Weekly digest (sent at end of week 1):
+│  ├─ "Here's what you learned this week"
+│  ├─ Top 5 queries + answers (bookmarked automatically if marked helpful)
+│  └─ "Topics your team is discussing right now" (live from team query trends)
+│
+└─ [Dismiss new-hire mode] button (available from day 3 onward)
+   └─ Or auto-dismissed after 30 days / manager marks "onboarding complete"
+```
+
+### Flow 4d: Intern-Specific (Time-Bounded Account)
+
+```
+[Settings > Account]
+├─ "Intern account — active until [date]"
+├─ Exports available before account expires:
+│  ├─ [Download my query history]
+│  ├─ [Export saved workspace to PDF]
+│  └─ [Email me a copy]
+├─ 7 days before expiry:
+│  └─ Banner: "Your account expires in 7 days. Export your work."
+└─ On expiry: account deactivated (data retained for 90 days for compliance)
+```
+
+### Flow 4e: Manager View of New Hire (How Managers See This)
+
+```
+[Analytics Dashboard] > [Team] > [New Hires tab]
+    │
+    ▼
+[New Hire Overview]
+├─ List of active new hires / interns on this team:
+│  ├─ Name | Start date | Queries asked | Topics explored | Last active
+│  ├─ Alice (intern) | Week 2 | 14 queries | Auth, Deploy | 2h ago
+│  └─ Bob (new hire) | Week 1 | 3 queries | — | Yesterday
+│
+├─ Knowledge gap indicator per new hire:
+│  └─ Topics asked about 3+ times with low satisfaction = "needs support"
+│
+├─ Manager actions:
+│  ├─ [Mark onboarding complete] — removes new-hire mode
+│  ├─ [Assign/change mentor]
+│  └─ [Add starter pack question] — curate team-specific onboarding queries
+│
+└─ Aggregate: "Average queries before first productive week: [X]"
+   (Benchmark: helps managers see if new hires are self-serving or escalating too early)
 ```
 
 ---
@@ -684,34 +864,34 @@ Entry Point: app.godspeed.local/admin (role-based redirect)
 
 ---
 
-### Feature: Knowledge Graph (Conditional Loading)
+### Feature: Knowledge Graph (Progressive Streaming)
 
 **Visible to:** All roles (different data per role)
 
+**Architecture note:** Graph rendering is entirely in-page. The backend streams nodes/edges via WebSocket (`WS /graph/stream`). The frontend renders them with Force-Graph 2D as they arrive — no reload, no screen switch. Loading state only if zero data has arrived.
+
+**Query-scoped subgraph (results page):** When a query is made, the frontend connects to `WS /graph/stream` scoped to the query's traversal — entities that are cited in the answer and their relationships. This uses `GET /graph/traverse?entity=...` seeded from the SSE-cited entities, not the full graph dump.
+
 ```
-[Results Page] — As results load...
+[Results Page] — Query submitted, two streams open simultaneously:
     │
-    ▼ [Answer generates first]
-    ├─ Display generated answer with citations (no wait)
+    ├─ Stream 1: SSE POST /agent/query
+    │  ├─ plan_ready → show agent names as badges (non-blocking)
+    │  ├─ agent_started → highlight active agent badge
+    │  ├─ answer_chunk → stream tokens into answer area word-by-word
+    │  ├─ guardrail_result → show confidence badge
+    │  └─ done → final answer complete, seed entity list for graph traverse
     │
-    ▼ [Background: Extracting entities from answer...]
+    └─ Stream 2: WS /graph/stream (query-scoped)
+       ├─ First node event → graph canvas appears, first node rendered
+       ├─ Each subsequent node event → node added, animated
+       ├─ Each edge event → edge drawn between existing nodes
+       └─ done event → graph complete; show node/edge count
     │
-    ▼ [First entity node connection established]
-    ├─ Render knowledge graph canvas
-    ├─ Show first entity as central node
-    │
-    ▼ [Background: Fetching related entities...]
-    │
-    ▼ [Each related entity connects]
-    ├─ Add to graph dynamically
-    ├─ Animate node appearance
-    │
-    ▼ [Background: Enriching with doc counts...]
-    │
-    ▼ [All nodes loaded]
-    ├─ Show fully connected graph
-    ├─ Nodes sized by importance/doc count
-    ├─ Color-coded by entity type
+    ▼ At no point does the page switch, reload, or blank out
+    ├─ If first SSE event arrives before first WS node: answer renders, graph area shows subtle pulse
+    ├─ If first WS node arrives: graph canvas activates immediately
+    └─ Condition: skeleton ONLY if zero events from both streams
 ```
 
 **Interaction:**

@@ -83,6 +83,29 @@ class Settings(BaseSettings):
     app_name: str = Field(default="Godspeed")
     debug: bool = Field(default=False)
 
+    # Flat Redis URL used by health check and async Redis clients
+    redis_url: str = Field(default="redis://localhost:6379/0")
+
+    # Qdrant — local: leave qdrant_url empty and use host+port.
+    # Hosted (Qdrant Cloud): set qdrant_url=https://xyz.cloud.qdrant.io:6333
+    # and qdrant_api_key to your cluster API key.
+    qdrant_host:    str = Field(default="localhost")
+    qdrant_port:    int = Field(default=6333)
+    qdrant_url:     str = Field(default="")       # overrides host+port when non-empty
+    qdrant_api_key: str = Field(default="")       # required for Qdrant Cloud
+
+    # Auth (dev credentials — override in .env)
+    demo_email:    str  = Field(default="demo@godspeed.local")
+    demo_password: str  = Field(default="demo")
+    admin_email:   str  = Field(default="admin@godspeed.local")
+    admin_password: str = Field(default="admin")
+    # Set True when running behind HTTPS so session cookies are Secure
+    cookie_secure: bool = Field(default=False)
+
+    # CORS — comma-separated list of allowed origins.
+    # NOTE: cannot be "*" when allow_credentials=True (CORS spec requirement).
+    cors_origins: str = Field(default="http://localhost:5173,http://localhost:3000")
+
     # Services
     redis: RedisSettings = Field(default_factory=RedisSettings)
     celery: CelerySettings = Field(default_factory=CelerySettings)

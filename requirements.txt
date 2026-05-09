@@ -1,87 +1,144 @@
-# Core orchestration
-langgraph==0.2.55
-langchain-core==0.3.29
+# =============================================================================
+# Godspeed — Python Dependencies
+#
+# UPGRADE POLICY
+#   - Do NOT upgrade langgraph beyond 0.2.x without auditing agent/graph.py.
+#     The 1.x series has breaking StateGraph API changes.
+#   - Do NOT upgrade langchain-core to 1.x while langgraph is on 0.2.x.
+#   - Do NOT upgrade langchain-google-genai beyond 2.x while langchain-core
+#     is on 0.3.x. The 3.x/4.x series requires langchain-core >=1.0.
+#   - Do NOT upgrade neo4j to 6.x — the async driver session API changed.
+#   - torch version must remain compatible with numpy <2.0 until numpy is
+#     explicitly upgraded and tested with FlagEmbedding.
+# =============================================================================
+
+
+# ── Core orchestration ────────────────────────────────────────────────────────
+langgraph==0.2.76
+langchain-core==0.3.86
 langchain-google-genai==2.0.9
 
-# Embeddings and reranking
-FlagEmbedding==1.2.11
 
-# GLiNER for PII masking
+# ── Embeddings & reranking ────────────────────────────────────────────────────
+FlagEmbedding==1.3.0
+
+
+# ── PII masking (local — zero egress) ────────────────────────────────────────
 gliner==0.2.13
 
-# Vector database
+
+# ── Vector database ───────────────────────────────────────────────────────────
 qdrant-client==1.17.1
 
-# BM25
+
+# ── BM25 sparse retrieval ─────────────────────────────────────────────────────
 rank-bm25==0.2.2
 
-# API framework
-fastapi==0.115.6
+
+# ── API framework ─────────────────────────────────────────────────────────────
+fastapi==0.115.12
 uvicorn[standard]==0.32.1
 
-# Pydantic
+
+# ── Schema / validation ───────────────────────────────────────────────────────
 pydantic==2.10.4
 pydantic-settings==2.7.0
 
-# Environment management
+
+# ── Environment ───────────────────────────────────────────────────────────────
 python-dotenv==1.0.1
 
-# HTTP client
-httpx==0.28.1
-requests==2.31.0
-aiohttp==3.9.1
 
-# Google AI SDK (transitive, pinned for stability)
-google-generativeai==0.8.3
+# ── HTTP clients ─────────────────────────────────────────────────────────────
+# aiohttp 3.9.x had CVE-2024-23334 (path traversal) and CVE-2024-52303.
+# requests 2.31.x had CVE-2023-32681 (Proxy-Authorization header leak).
+httpx==0.28.1
+requests==2.33.1
+aiohttp==3.12.15
+
+
+# ── Google AI SDK ─────────────────────────────────────────────────────────────
+google-generativeai==0.8.6
 google-auth==2.37.0
 
-# Numpy (required by FlagEmbedding)
+
+# ── Numerical / ML ───────────────────────────────────────────────────────────
+# numpy pinned to 1.x — FlagEmbedding and torch 2.6 are tested against 1.26.x.
+# Upgrading to numpy 2.x requires re-testing the full embedding pipeline.
 numpy==1.26.4
+# torch: CPU build. For GPU replace with the matching CUDA wheel:
+#   https://pytorch.org/get-started/locally/
+# torch 2.6 is compatible with numpy 1.26.x and transformers 4.51.x.
+torch==2.6.0
+transformers==4.51.0
 
-# PyTorch CPU (FlagEmbedding dependency — use GPU build if available)
-torch==2.5.1
 
-# Transformers (FlagEmbedding dependency)
-transformers==4.47.1
-
-# Ingestion — document parsing
+# ── Document parsing ─────────────────────────────────────────────────────────
+# docling 0.7.0 (old pin) predates DocumentConverter which was added in 1.0.
+# src/adapters/web_scraper.py uses: from docling import DocumentConverter
+# If that import fails on this version, use the explicit path:
+#   from docling.document_converter import DocumentConverter
+docling==2.7.0
 PyMuPDF==1.24.14
 
-# Ingestion — NLP / chunking
+
+# ── NLP / chunking ───────────────────────────────────────────────────────────
 spacy==3.8.3
-# Run after install: python -m spacy download en_core_web_sm
+# After install, download the English model:
+#   python -m spacy download en_core_web_sm
 
-# Ingestion — Supabase
-supabase==2.11.0
 
-# Ingestion — background jobs
-celery==5.4.0
-celery[redis]==5.4.0
+# ── Supabase (metadata storage) ───────────────────────────────────────────────
+supabase==2.15.0
+
+
+# ── Background task queue ─────────────────────────────────────────────────────
+# celery[redis] installs the Redis transport. redis is also pinned below because
+# it is used directly (src/redis/cache.py, queues.py, locks.py, session_state.py).
+celery[redis]==5.5.0
 redis==5.2.1
 
-# File upload support for FastAPI
+
+# ── File upload ───────────────────────────────────────────────────────────────
 python-multipart==0.0.27
 
-# Graph store
-neo4j==5.27.0
 
-# Tools agent (GitHub / Slack / Notion via GPT-4o-mini)
-openai>=1.30.0
+# ── Graph store ───────────────────────────────────────────────────────────────
+# 5.28.x is the last stable 5.x. Neo4j 6.x changed the async driver
+# session/transaction API — do not upgrade without updating graph_store/writer.py.
+neo4j==5.28.4
 
-# Existing project dependencies
-beautifulsoup4==4.12.2
+
+# ── External tools agent (GitHub / Slack / Notion) ───────────────────────────
+openai==1.82.1
+
+
+# ── Web scraping ──────────────────────────────────────────────────────────────
+beautifulsoup4==4.12.3
 lxml==5.3.0
-docling==0.7.0
 
-# File agent — document parsers
+
+# ── File agent — document parsers ─────────────────────────────────────────────
 pdfplumber==0.11.4
 python-docx==1.1.2
 pandas==2.2.3
 openpyxl==3.1.5
 
-# File agent — file watcher
+
+# ── File agent — file watcher ─────────────────────────────────────────────────
 watchdog==6.0.0
 
-# File agent — OCR fallback for scanned PDFs (optional but recommended)
+
+# ── File agent — OCR fallback for scanned PDFs (optional) ────────────────────
+# Requires Tesseract installed on the host:
+#   macOS:  brew install tesseract
+#   Ubuntu: apt install tesseract-ocr
+#   Windows: https://github.com/UB-Mannheim/tesseract/wiki
 pytesseract==0.3.13
 Pillow==11.1.0
+
+
+# ── Optional: live web fetching (configure via .env) ─────────────────────────
+# Uncomment whichever you use. Neither is imported unless its API key is set.
+# firecrawl-py==1.9.0
+# tavily-python==0.5.0

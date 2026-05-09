@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import pkg_resources; conflicts=[str\\(e\\) for e in pkg_resources.working_set]; print\\(len\\(conflicts\\)\\)\")",
+      "Bash(pip index *)"
+    ]
+  }
+}
