@@ -11,6 +11,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/graph", tags=["graph"])
 
 
+@router.get("/nodes")
+async def graph_nodes(limit: int = 50) -> dict:
+    from graph_store.writer import get_driver
+    from graph_store.config import settings
+    driver = get_driver()
+    async with driver.session(database=settings.neo4j_database) as session:
+        result = await session.run(
+            "MATCH (n) WHERE NOT n:Chunk AND NOT n:Document RETURN labels(n)[0] AS label, n.name AS name LIMIT $limit",
+            limit=limit,
+        )
+        records = await result.data()
+    return {"count": len(records), "nodes": records}
+
+
 def _get_driver():
     from graph_store.writer import get_driver
     return get_driver()

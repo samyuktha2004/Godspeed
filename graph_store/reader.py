@@ -76,10 +76,21 @@ LIMIT 20
 # ---------------------------------------------------------------------------
 
 async def _run_query(driver: AsyncDriver, cypher: str, **params) -> list[str]:
-    async with driver.session(database=settings.neo4j_database) as session:
-        result = await session.run(cypher, **params)
-        records = await result.data()
-        return [r["text"] for r in records if r.get("text")]
+    from neo4j.exceptions import SessionExpired
+    try:
+        async with driver.session(database=settings.neo4j_database) as session:
+            result = await session.run(cypher, **params)
+            records = await result.data()
+            return [r["text"] for r in records if r.get("text")]
+    except SessionExpired:
+        logger.warning("reader: SessionExpired — resetting driver and retrying")
+        from graph_store.writer import close_driver, get_driver
+        await close_driver()
+        driver = get_driver()
+        async with driver.session(database=settings.neo4j_database) as session:
+            result = await session.run(cypher, **params)
+            records = await result.data()
+            return [r["text"] for r in records if r.get("text")]
 
 
 async def _union_queries(driver: AsyncDriver, queries: list[tuple[str, dict]]) -> list[str]:

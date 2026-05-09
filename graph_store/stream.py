@@ -34,6 +34,10 @@ async def graph_stream(websocket: WebSocket):
     driver = AsyncGraphDatabase.driver(
         settings.neo4j_uri,
         auth=(settings.neo4j_username, settings.neo4j_password),
+        max_connection_lifetime=1800,
+        connection_acquisition_timeout=30,
+        keep_alive=True,
+        liveness_check_timeout=10,
     )
     try:
         async with driver.session(database=settings.neo4j_database) as session:
