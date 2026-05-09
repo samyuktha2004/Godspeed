@@ -65,6 +65,9 @@ python-multipart==0.0.27
 # Graph store
 neo4j==5.27.0
 
+# Tools agent (GitHub / Slack / Notion via GPT-4o-mini)
+openai>=1.30.0
+
 # Existing project dependencies
 beautifulsoup4==4.12.2
 lxml==5.3.0
