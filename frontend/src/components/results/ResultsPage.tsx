@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useSearch } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/authStore'
 import { useSSEStream } from '@/hooks/useSSEStream'
 import { useGraphStream } from '@/hooks/useGraphStream'
@@ -17,6 +18,7 @@ import { GraphNodeTooltip } from '@/components/results/GraphNodeTooltip'
 import { GraphNodeDetailPanel } from '@/components/results/GraphNodeDetailPanel'
 import { QueryFeedback } from '@/components/results/QueryFeedback'
 import { ShareResults } from '@/components/results/ShareResults'
+import { NoResultsState } from '@/components/common/NoResultsState'
 import type {
   AgentTask, RetrievedChunk, GuardrailResult, ExecutionPlan,
   GraphNode, GraphEdge,
@@ -25,6 +27,7 @@ import type {
 export function ResultsPage() {
   const user       = useAuthStore((s) => s.user)
   const sessionRef = useRef(crypto.randomUUID())
+  const { q: initialQuery } = useSearch({ from: '/query' })
 
   // ── SSE state ───────────────────────────────────────────────────────────────
   const [plan, setPlan]               = useState<AgentTask[]>([])
@@ -111,7 +114,9 @@ export function ResultsPage() {
                 confidence: result.retrieval_confidence,
               },
             }))
-            setCitations((prev) => [...prev, ...result.chunks])
+          },
+          citations: ({ chunks }) => {
+            setCitations(chunks)
           },
           answer_chunk: ({ chunk }) => {
             setAnswerText((prev) => prev + chunk)
@@ -137,6 +142,14 @@ export function ResultsPage() {
     setSelectedNode(node)
   }, [])
 
+  // Auto-fire query from URL ?q= param (set by Home, SuggestedTopics, Workspace replay)
+  const runQueryRef = useRef(runQuery)
+  runQueryRef.current = runQuery
+  useEffect(() => {
+    if (initialQuery) runQueryRef.current(initialQuery)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // mount-only — initialQuery is read via ref to avoid stale closure
+
   // ── Derived ─────────────────────────────────────────────────────────────────
   const isLoading   = state === 'loading'
   const isStreaming = state === 'streaming'
@@ -150,7 +163,7 @@ export function ResultsPage() {
     // Wider container to accommodate side-by-side layout on large screens
     <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-4 py-8">
       {/* Search bar — always visible */}
-      <SearchBox onSubmit={runQuery} disabled={isLoading || isStreaming} />
+      <SearchBox onSubmit={runQuery} disabled={isLoading || isStreaming} defaultValue={initialQuery ?? ''} />
 
       {/* Pre-first-event skeleton */}
       {isLoading && !hasData && <LoadingSkeleton rows={4} />}
@@ -174,6 +187,8 @@ export function ResultsPage() {
             )}
 
             {answerText && <Answer text={answerText} />}
+
+            {isComplete && !answerText && <NoResultsState query={currentQuery} />}
 
             {guardrail?.escalate && <HallucinationWarning />}
 

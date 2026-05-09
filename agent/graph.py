@@ -62,7 +62,7 @@ async def doc_search_node(state: KnowledgeGraphState) -> dict:
     await _push_event(
         queue,
         "agent_done",
-        {"agent": "doc_search", "chunks": len(chunks), "confidence": confidence},
+        {"agent": "doc_search", "retrieval_confidence": confidence},
     )
     return {"agent_results": {**state.agent_results, "doc_search": result}}
 
@@ -91,7 +91,7 @@ async def ticket_lookup_node(state: KnowledgeGraphState) -> dict:
     await _push_event(
         queue,
         "agent_done",
-        {"agent": "ticket_lookup", "chunks": len(chunks), "confidence": confidence},
+        {"agent": "ticket_lookup", "retrieval_confidence": confidence},
     )
     return {"agent_results": {**state.agent_results, "ticket_lookup": result}}
 
@@ -120,7 +120,7 @@ async def live_docs_node(state: KnowledgeGraphState) -> dict:
     await _push_event(
         queue,
         "agent_done",
-        {"agent": "live_docs", "chunks": len(chunks), "confidence": confidence},
+        {"agent": "live_docs", "retrieval_confidence": confidence},
     )
     return {"agent_results": {**state.agent_results, "live_docs": result}}
 
@@ -143,6 +143,8 @@ async def synthesiser_node(state: KnowledgeGraphState) -> dict:
             if chunk.chunk_id not in seen:
                 seen.add(chunk.chunk_id)
                 all_chunks.append(chunk)
+
+    await _push_event(queue, "citations", {"chunks": [c.model_dump() for c in all_chunks]})
 
     return {"final_answer": final_answer, "citations": all_chunks}
 

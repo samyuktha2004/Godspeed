@@ -2,12 +2,13 @@ import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 
 interface Props {
-  onSubmit: (query: string) => void
-  disabled?: boolean
-  className?: string
+  onSubmit:     (query: string) => void
+  disabled?:    boolean
+  className?:   string
+  defaultValue?: string
 }
 
-export function SearchBox({ onSubmit, disabled, className }: Props) {
+export function SearchBox({ onSubmit, disabled, className, defaultValue }: Props) {
   const ref = useRef<HTMLInputElement>(null)
 
   // Cmd+K / Ctrl+K → focus from anywhere
@@ -36,6 +37,7 @@ export function SearchBox({ onSubmit, disabled, className }: Props) {
       <input
         ref={ref}
         type="text"
+        defaultValue={defaultValue}
         placeholder="Ask anything… (⌘K)"
         disabled={disabled}
         onKeyDown={(e) => e.key === 'Enter' && submit()}

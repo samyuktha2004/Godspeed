@@ -40,9 +40,10 @@ export interface GuardrailResult {
 export interface SSEEventMap {
   plan_ready:        ExecutionPlan
   agent_started:     { agent: string }
-  agent_done:        AgentResult
+  agent_done:        { agent: string; retrieval_confidence: 'high' | 'medium' | 'low'; error?: string }
   synthesis_started: Record<string, never>
   answer_chunk:      { chunk: string }
+  citations:         { chunks: RetrievedChunk[] }
   guardrail_result:  GuardrailResult
   done:              Record<string, never>
   error:             { message: string }
