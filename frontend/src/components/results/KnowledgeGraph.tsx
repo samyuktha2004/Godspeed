@@ -65,12 +65,16 @@ export function KnowledgeGraph({ nodes, edges, loading, onNodeClick, onNodeHover
     import('force-graph').then(({ default: ForceGraph2D }) => {
       if (!containerRef.current) return
 
-      graphRef.current = ForceGraph2D(containerRef.current)
-        .backgroundColor('transparent')
+      // ForceGraph2D() returns a component function; call it with the element to mount
+      const fg = ForceGraph2D()
+      fg(containerRef.current)
+      fg.backgroundColor('transparent')
         .nodeId('id')
         .nodeLabel('name')
         .nodeColor((n: FGNode) => n.color)
         .nodeRelSize(6)
+        .width(containerRef.current.clientWidth || 380)
+        .height(containerRef.current.clientHeight || 400)
         .linkColor(() => '#94a3b8')
         .linkLabel('rel')
         .linkDirectionalArrowLength(4)
@@ -78,11 +82,10 @@ export function KnowledgeGraph({ nodes, edges, loading, onNodeClick, onNodeHover
         .onNodeClick((n: FGNode) => {
           onNodeClick({ id: n.id, label: n.label, name: n.name })
         })
-        .onNodeHover((n: FGNode | null, _prev: unknown, event: MouseEvent) => {
-          const x = event?.clientX ?? 0
-          const y = event?.clientY ?? 0
-          onNodeHover(n ? { id: n.id, label: n.label, name: n.name } : null, x, y)
+        .onNodeHover((n: FGNode | null) => {
+          onNodeHover(n ? { id: n.id, label: n.label, name: n.name } : null, 0, 0)
         })
+      graphRef.current = fg
 
       // Push any data that arrived before the canvas was ready
       pushData(pendingRef.current.nodes, pendingRef.current.edges)
