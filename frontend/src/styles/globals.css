@@ -1,9 +1,9 @@
+/* highlight.js theme — must be before @tailwind directives */
+@import 'highlight.js/styles/github.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* highlight.js theme — auto light/dark via CSS vars */
-@import 'highlight.js/styles/github.css' layer(base);
 
 @layer base {
   :root {
