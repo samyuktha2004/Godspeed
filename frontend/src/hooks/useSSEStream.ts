@@ -14,6 +14,7 @@ export function useSSEStream() {
   const [state, setState]                   = useState<StreamState>('idle')
   const [error, setError]                   = useState<string | null>(null)
   const firstEventRef                        = useRef(false)
+  const completedRef                         = useRef(false)
   const abortRef                             = useRef<AbortController | null>(null)
 
   const stream = useCallback(
@@ -24,6 +25,7 @@ export function useSSEStream() {
       abortRef.current = controller
 
       firstEventRef.current = false
+      completedRef.current  = false
       setState('loading')
       setError(null)
 
@@ -85,6 +87,7 @@ export function useSSEStream() {
               callbacks[eventName]?.(data)
 
               if (eventName === 'done') {
+                completedRef.current = true
                 setState('complete')
               } else if (eventName === 'error') {
                 setError(data.message)
@@ -103,13 +106,11 @@ export function useSSEStream() {
           }
         }
 
-        // Stream ended mid-answer (network drop after first token)
-        if (firstEventRef.current && state !== 'complete' && state !== 'error') {
+        // Stream ended without a done event — treat as incomplete
+        if (firstEventRef.current && !completedRef.current) {
           setError('Connection dropped — answer may be incomplete')
           setState('error')
           callbacks.error?.({ message: 'Connection dropped — answer may be incomplete' })
-        } else if (state !== 'error') {
-          setState('complete')
         }
       } catch (err) {
         if ((err as Error).name === 'AbortError') return

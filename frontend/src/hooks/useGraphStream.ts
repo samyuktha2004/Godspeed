@@ -45,6 +45,8 @@ export function useGraphStream() {
         } else if (msg.event === 'edge') {
           callbacksRef.current?.onEdge(msg as GraphEdge)
         } else if (msg.event === 'done') {
+          // Server is done — prevent onclose from triggering a reconnect
+          activeRef.current = false
           setGState('done')
           callbacksRef.current?.onDone(msg as GraphDoneEvent)
         }
