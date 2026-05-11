@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react'
 import type { GraphNode, GraphEdge } from '@/types/api'
-import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 
 // ─── Colour palette ───────────────────────────────────────────────────────────
 
@@ -29,20 +28,20 @@ interface FGLink {
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
-  nodes:            GraphNode[]
-  edges:            GraphEdge[]
-  loading:          boolean   // true while SSE streaming but no nodes yet
-  onNodeClick:      (node: GraphNode) => void
-  onNodeHover:      (node: GraphNode | null, x: number, y: number) => void
+  nodes:       GraphNode[]
+  edges:       GraphEdge[]
+  streaming:   boolean   // true while SSE/WS is active (drives the empty state animation)
+  onNodeClick: (node: GraphNode) => void
+  onNodeHover: (node: GraphNode | null, x: number, y: number) => void
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export function KnowledgeGraph({ nodes, edges, loading, onNodeClick, onNodeHover }: Props) {
+export function KnowledgeGraph({ nodes, edges, streaming, onNodeClick, onNodeHover }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null)
-  // Keep latest nodes/edges in a ref so the async init callback can read them
+  // Accumulates data that arrives before the async canvas is ready
   const pendingRef = useRef<{ nodes: GraphNode[]; edges: GraphEdge[] }>({ nodes: [], edges: [] })
 
   const pushData = (n: GraphNode[], e: GraphEdge[]) => {
@@ -54,7 +53,7 @@ export function KnowledgeGraph({ nodes, edges, loading, onNodeClick, onNodeHover
         name:  node.name,
         color: NODE_COLOURS[node.label] ?? '#94a3b8',
       })),
-      links: e.map((edge) => ({ source: edge.from, target: edge.to, rel: edge.rel })),
+      links: e.map((edge) => ({ source: edge.from, target: edge.to, rel: edge.rel } as FGLink)),
     })
   }
 
@@ -65,7 +64,6 @@ export function KnowledgeGraph({ nodes, edges, loading, onNodeClick, onNodeHover
     import('force-graph').then(({ default: ForceGraph2D }) => {
       if (!containerRef.current) return
 
-      // ForceGraph2D() returns a component function; call it with the element to mount
       const fg = ForceGraph2D()
       fg(containerRef.current)
       fg.backgroundColor('transparent')
@@ -73,6 +71,7 @@ export function KnowledgeGraph({ nodes, edges, loading, onNodeClick, onNodeHover
         .nodeLabel('name')
         .nodeColor((n: FGNode) => n.color)
         .nodeRelSize(6)
+        // Use fixed dimensions — container may be display:none on mobile tab switch
         .width(containerRef.current.clientWidth || 380)
         .height(containerRef.current.clientHeight || 400)
         .linkColor(() => '#94a3b8')
@@ -87,7 +86,7 @@ export function KnowledgeGraph({ nodes, edges, loading, onNodeClick, onNodeHover
         })
       graphRef.current = fg
 
-      // Push any data that arrived before the canvas was ready
+      // Flush any nodes/edges that arrived while the canvas was initialising
       pushData(pendingRef.current.nodes, pendingRef.current.edges)
     })
 
@@ -104,19 +103,35 @@ export function KnowledgeGraph({ nodes, edges, loading, onNodeClick, onNodeHover
     pushData(nodes, edges)
   }, [nodes, edges])
 
+  const isEmpty = nodes.length === 0
+
   return (
-    <div className="relative hidden h-[400px] w-full overflow-hidden rounded-xl border border-surface-subtle lg:block">
-      {loading && nodes.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <LoadingSkeleton rows={2} className="w-3/4" />
+    <div className="relative h-[400px] w-full overflow-hidden rounded-xl border border-surface-subtle">
+
+      {/* Empty state overlay — removed once first node arrives */}
+      {isEmpty && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none">
+          {streaming ? (
+            <>
+              <div className="flex gap-1.5">
+                <span className="h-2 w-2 animate-bounce rounded-full bg-stone-300 [animation-delay:-0.3s] dark:bg-stone-600" />
+                <span className="h-2 w-2 animate-bounce rounded-full bg-stone-300 [animation-delay:-0.15s] dark:bg-stone-600" />
+                <span className="h-2 w-2 animate-bounce rounded-full bg-stone-300 dark:bg-stone-600" />
+              </div>
+              <p className="text-xs text-stone-400">Building knowledge graph…</p>
+            </>
+          ) : (
+            <p className="text-sm text-stone-400">No graph data</p>
+          )}
         </div>
       )}
-      {!loading && nodes.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center text-sm text-stone-400">
-          No graph data yet
-        </div>
-      )}
-      <div ref={containerRef} className="h-full w-full" aria-label="Knowledge graph visualisation" />
+
+      {/* Canvas — always present so force-graph can attach */}
+      <div
+        ref={containerRef}
+        className="h-full w-full"
+        aria-label="Knowledge graph visualisation"
+      />
     </div>
   )
 }

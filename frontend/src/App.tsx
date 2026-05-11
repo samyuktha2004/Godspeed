@@ -5,47 +5,44 @@ import { useAuthStore } from '@/stores/authStore'
 import { ToastStack } from '@/components/common/Toast'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 import { NavBar } from '@/components/common/NavBar'
+import { Sidebar } from '@/components/common/Sidebar'
+import { cn } from '@/lib/utils'
 import { env } from '@/config/env'
 
 export default function App() {
-  const theme    = useUIStore((s) => s.theme)
+  const theme       = useUIStore((s) => s.theme)
+  const sidebarOpen = useUIStore((s) => s.sidebarOpen)
   const { pathname } = useLocation()
-  const navigate = useNavigate()
+  const navigate    = useNavigate()
   const { user, login, logout } = useAuthStore()
-  const validated = useRef(false)
+  const validated   = useRef(false)
 
+  // Sync theme class on <html>
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
   }, [theme])
 
-  // Validate persisted session against the server on first mount.
-  // Prevents stale localStorage state from granting access after server-side expiry.
+  // Validate persisted session against the server on first mount
   useEffect(() => {
     if (validated.current) return
     validated.current = true
-
-    if (!user) return // not logged in — no need to check
-
-    fetch(`${env.apiBaseUrl}/api/auth/refresh`, {
-      method:      'POST',
-      credentials: 'include',
-    })
+    if (!user) return
+    fetch(`${env.apiBaseUrl}/api/auth/refresh`, { method: 'POST', credentials: 'include' })
       .then(async (res) => {
         if (res.ok) {
           const { user: freshUser } = await res.json()
-          login(freshUser) // refresh user data in case role/team changed
+          login(freshUser)
         } else {
-          // Server rejected the session — clear local state
           logout()
           navigate({ to: '/login' })
         }
       })
       .catch(() => {
-        // Network down — keep local state, apiFetch will handle 401s lazily
+        // Network down — keep local state; lazy 401 handling via apiFetch
       })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Cmd+K / Ctrl+K — jump to query page
+  // ⌘K / Ctrl+K — jump to query
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -61,10 +58,33 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-surface font-sans text-stone-900 dark:bg-stone-950 dark:text-stone-100">
-      {!isLoginPage && <NavBar />}
-      <Suspense fallback={<LoadingSkeleton />}>
-        <Outlet />
-      </Suspense>
+
+      {/* Mobile top nav — hidden on desktop */}
+      {!isLoginPage && (
+        <div className="lg:hidden">
+          <NavBar />
+        </div>
+      )}
+
+      {/* Desktop sidebar — hidden on mobile */}
+      {!isLoginPage && (
+        <div className="hidden lg:block">
+          <Sidebar />
+        </div>
+      )}
+
+      {/* Main content — offset by sidebar on desktop */}
+      <main
+        className={cn(
+          'transition-[margin] duration-200 ease-in-out',
+          !isLoginPage && (sidebarOpen ? 'lg:ml-60' : 'lg:ml-14'),
+        )}
+      >
+        <Suspense fallback={<div className="p-8"><LoadingSkeleton rows={5} /></div>}>
+          <Outlet />
+        </Suspense>
+      </main>
+
       <ToastStack />
     </div>
   )
