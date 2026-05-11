@@ -40,15 +40,28 @@ interface Props {
 
 export function KnowledgeGraph({ nodes, edges, loading, onNodeClick, onNodeHover }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
-  // Store the ForceGraph2D instance — typed as any because force-graph has no bundled types
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null)
+  // Keep latest nodes/edges in a ref so the async init callback can read them
+  const pendingRef = useRef<{ nodes: GraphNode[]; edges: GraphEdge[] }>({ nodes: [], edges: [] })
+
+  const pushData = (n: GraphNode[], e: GraphEdge[]) => {
+    if (!graphRef.current) return
+    graphRef.current.graphData({
+      nodes: n.map((node) => ({
+        id:    node.id,
+        label: node.label,
+        name:  node.name,
+        color: NODE_COLOURS[node.label] ?? '#94a3b8',
+      })),
+      links: e.map((edge) => ({ source: edge.from, target: edge.to, rel: edge.rel })),
+    })
+  }
 
   // Initialise the canvas once on mount
   useEffect(() => {
     if (!containerRef.current) return
 
-    // Dynamic import — force-graph is a large canvas lib; keep it out of initial bundle
     import('force-graph').then(({ default: ForceGraph2D }) => {
       if (!containerRef.current) return
 
@@ -70,35 +83,22 @@ export function KnowledgeGraph({ nodes, edges, loading, onNodeClick, onNodeHover
           const y = event?.clientY ?? 0
           onNodeHover(n ? { id: n.id, label: n.label, name: n.name } : null, x, y)
         })
+
+      // Push any data that arrived before the canvas was ready
+      pushData(pendingRef.current.nodes, pendingRef.current.edges)
     })
 
     return () => {
-      // force-graph cleanup
       graphRef.current?._destructor?.()
       graphRef.current = null
     }
-    // onNodeClick / onNodeHover are stable callbacks passed from parent via useCallback
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Push updated data whenever nodes or edges change
   useEffect(() => {
-    if (!graphRef.current) return
-
-    const fgNodes: FGNode[] = nodes.map((n) => ({
-      id:    n.id,
-      label: n.label,
-      name:  n.name,
-      color: NODE_COLOURS[n.label] ?? '#94a3b8',
-    }))
-
-    const fgLinks: FGLink[] = edges.map((e) => ({
-      source: e.from,
-      target: e.to,
-      rel:    e.rel,
-    }))
-
-    graphRef.current.graphData({ nodes: fgNodes, links: fgLinks })
+    pendingRef.current = { nodes, edges }
+    pushData(nodes, edges)
   }, [nodes, edges])
 
   return (
