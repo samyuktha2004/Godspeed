@@ -21,7 +21,7 @@ export function QueryFeedback({ queryId }: Props) {
     try {
       await apiFetch(`/api/query/${queryId}/feedback`, {
         method: 'POST',
-        body:   JSON.stringify({ sentiment, text: extraText ?? text || undefined }),
+        body:   JSON.stringify({ sentiment, text: (extraText ?? text) || undefined }),
       })
       setSent(sentiment)
       setShowFlag(false)
