@@ -74,6 +74,7 @@ class IntegrationSettings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"
 
 
 class Settings(BaseSettings):
@@ -116,6 +117,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         nested_delimiter = "__"
         case_sensitive = False
+        extra = "ignore"
 
 
 # Load settings
