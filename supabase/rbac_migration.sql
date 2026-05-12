@@ -51,12 +51,14 @@ alter table teams add column if not exists workspace_id uuid references workspac
 alter table teams add column if not exists name         text;
 alter table teams add column if not exists slug         text;
 
--- Backfill the default team row
-update teams
-   set workspace_id = '00000000-0000-0000-0000-000000000001',
-       name         = 'Engineering',
-       slug         = 'engineering'
- where team_id = 'default';
+-- Ensure the default team row exists, then backfill the new columns.
+-- Insert is a no-op if team_id='default' already exists.
+insert into teams (team_id, workspace_id, name, slug)
+values ('default', '00000000-0000-0000-0000-000000000001', 'Engineering', 'engineering')
+on conflict (team_id) do update
+    set workspace_id = excluded.workspace_id,
+        name         = excluded.name,
+        slug         = excluded.slug;
 
 
 -- ── User → Team memberships ──────────────────────────────────
