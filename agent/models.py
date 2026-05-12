@@ -7,9 +7,12 @@ from pydantic import BaseModel, Field
 
 
 class QueryInput(BaseModel):
-    query: str
-    team_id: str
+    query:      str
+    team_id:    str
     session_id: str
+    # Populated server-side from the auth session — never trusted from the client body.
+    # Empty list = fall back to team_id-based filtering (legacy / dev mode).
+    allowed_channel_ids: list[str] = Field(default_factory=list)
 
 
 class AgentTask(BaseModel):

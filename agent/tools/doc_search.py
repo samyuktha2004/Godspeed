@@ -111,7 +111,11 @@ def _reciprocal_rank_fusion(
     return scores
 
 
-async def run_doc_search(query: str, team_id: str) -> list[RetrievedChunk]:
+async def run_doc_search(
+    query: str,
+    team_id: str,
+    allowed_channel_ids: list[str] | None = None,
+) -> list[RetrievedChunk]:
     masked_query = _mask_pii(query)
     logger.info("doc_search: masked query = %r", masked_query)
 
@@ -144,15 +148,36 @@ async def run_doc_search(query: str, team_id: str) -> list[RetrievedChunk]:
 
     try:
         client = AsyncQdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
-        team_filter = qmodels.Filter(
-            must=[qmodels.FieldCondition(key="team_id", match=qmodels.MatchValue(value=team_id))]
-        )
+
+        # Channel-based filter (RBAC): use allowed_channel_ids when set.
+        # Falls back to team_id for legacy points that pre-date channel tagging.
+        if allowed_channel_ids:
+            qdrant_filter = qmodels.Filter(
+                should=[
+                    # New RBAC path: chunk tagged with an allowed channel
+                    qmodels.FieldCondition(
+                        key="channel_id",
+                        match=qmodels.MatchAny(any=allowed_channel_ids),
+                    ),
+                    # Legacy path: chunk has no channel_id but matches team_id
+                    qmodels.Filter(
+                        must=[
+                            qmodels.FieldCondition(key="team_id", match=qmodels.MatchValue(value=team_id)),
+                            qmodels.IsNullCondition(is_null=qmodels.PayloadField(key="channel_id")),
+                        ]
+                    ),
+                ]
+            )
+        else:
+            qdrant_filter = qmodels.Filter(
+                must=[qmodels.FieldCondition(key="team_id", match=qmodels.MatchValue(value=team_id))]
+            )
 
         dense_response = await client.query_points(
             collection_name=settings.qdrant_collection,
             query=dense_vector,
             using=settings.qdrant_dense_vector_name,
-            query_filter=team_filter,
+            query_filter=qdrant_filter,
             limit=settings.rrf_top_k,
             with_payload=True,
         )
@@ -166,7 +191,7 @@ async def run_doc_search(query: str, team_id: str) -> list[RetrievedChunk]:
             collection_name=settings.qdrant_collection,
             query=qmodels.SparseVector(indices=sparse_indices, values=sparse_values),
             using=settings.qdrant_sparse_vector_name,
-            query_filter=team_filter,
+            query_filter=qdrant_filter,
             limit=settings.rrf_top_k,
             with_payload=True,
         )

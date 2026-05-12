@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     app_name: str = Field(default="Godspeed")
     debug: bool = Field(default=False)
 
+    # Supabase (shared with ingestion layer; leave blank for local-only dev)
+    supabase_url: str = Field(default="")
+    supabase_key: str = Field(default="")
+
     # Flat Redis URL used by health check and async Redis clients
     redis_url: str = Field(default="redis://localhost:6379/0")
 

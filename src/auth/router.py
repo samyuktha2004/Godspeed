@@ -1,4 +1,4 @@
-"""Auth endpoints — session-cookie-based, credentials from .env."""
+"""Auth endpoints — session-cookie-based, credentials from .env or Supabase users table."""
 
 from __future__ import annotations
 
@@ -21,31 +21,37 @@ SESSION_TTL = 8 * 3600  # 8 hours
 COOKIE_NAME = "gs_session"
 
 # ---------------------------------------------------------------------------
-# Hardcoded dev personas — keys are always lowercased for case-insensitive lookup
+# Dev fallback credentials (used when Supabase is not configured or user not
+# found in DB). Keys are always lowercased for case-insensitive lookup.
+# allowed_channel_ids defaults to the seeded General channel.
 # ---------------------------------------------------------------------------
+_DEFAULT_CHANNEL = "00000000-0000-0000-0000-000000000002"
+
 _CREDENTIALS: dict[str, dict] = {
     settings.demo_email.lower(): {
         "password": settings.demo_password,
         "user": {
-            "id":          "user-demo",
-            "email":       settings.demo_email.lower(),
-            "name":        "Demo User",
-            "role":        "engineer",
-            "team_id":     "default",
-            "team":        {"id": "default", "name": "Engineering"},
-            "is_new_hire": False,
+            "id":                   "user-demo",
+            "email":                settings.demo_email.lower(),
+            "name":                 "Demo User",
+            "role":                 "engineer",
+            "team_id":              "default",
+            "team":                 {"id": "default", "name": "Engineering"},
+            "is_new_hire":          False,
+            "allowed_channel_ids":  [_DEFAULT_CHANNEL],
         },
     },
     settings.admin_email.lower(): {
         "password": settings.admin_password,
         "user": {
-            "id":          "user-admin",
-            "email":       settings.admin_email.lower(),
-            "name":        "Admin",
-            "role":        "admin",
-            "team_id":     "default",
-            "team":        {"id": "default", "name": "Engineering"},
-            "is_new_hire": False,
+            "id":                   "user-admin",
+            "email":                settings.admin_email.lower(),
+            "name":                 "Admin",
+            "role":                 "admin",
+            "team_id":              "default",
+            "team":                 {"id": "default", "name": "Engineering"},
+            "is_new_hire":          False,
+            "allowed_channel_ids":  [_DEFAULT_CHANNEL],
         },
     },
 }
@@ -111,22 +117,56 @@ class LoginRequest(BaseModel):
 
 @router.post("/login")
 async def login(body: LoginRequest, response: Response) -> dict:
-    entry = _CREDENTIALS.get(body.email.lower())
-    if not entry or entry["password"] != body.password:
-        logger.warning("auth_failed", extra={"email": body.email})
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+    email = body.email.lower()
+    user_obj: dict | None = None
+
+    # ── Try DB-backed auth first ─────────────────────────────
+    try:
+        import bcrypt
+        from src.auth.db import get_allowed_channel_ids, get_user_by_email, get_user_team_id
+
+        db_user = get_user_by_email(email)
+        if db_user and db_user.get("password_hash"):
+            pw_match = bcrypt.checkpw(
+                body.password.encode(),
+                db_user["password_hash"].encode(),
+            )
+            if pw_match:
+                channel_ids = get_allowed_channel_ids(db_user["id"], db_user["role"])
+                team_id = get_user_team_id(db_user["id"]) or "default"
+                user_obj = {
+                    "id":                  db_user["id"],
+                    "email":               db_user["email"],
+                    "name":                db_user["name"],
+                    "role":                db_user["role"],
+                    "team_id":             team_id,
+                    "team":                {"id": team_id, "name": team_id.capitalize()},
+                    "is_new_hire":         db_user.get("is_new_hire", False),
+                    "allowed_channel_ids": channel_ids,
+                }
+                logger.info("auth_login_db", extra={"email": email, "role": db_user["role"]})
+    except Exception:
+        logger.warning("auth_db_unavailable — falling back to hardcoded credentials")
+
+    # ── Fall back to hardcoded dev credentials ───────────────
+    if user_obj is None:
+        entry = _CREDENTIALS.get(email)
+        if not entry or entry["password"] != body.password:
+            logger.warning("auth_failed", extra={"email": email})
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        user_obj = entry["user"]
+        logger.info("auth_login_dev", extra={"email": email})
 
     session_id = str(uuid4())
     stored = await _set_session(
         session_id,
-        {"user": entry["user"], "created_at": datetime.utcnow().isoformat()},
+        {"user": user_obj, "created_at": datetime.utcnow().isoformat()},
     )
     if not stored:
         raise HTTPException(status_code=503, detail="Session store unavailable — try again shortly")
 
     response.set_cookie(key=COOKIE_NAME, value=session_id, **_make_cookie_kwargs())
-    logger.info("auth_login", extra={"email": body.email, "session_id": session_id})
-    return {"user": entry["user"]}
+    return {"user": user_obj}
 
 
 @router.post("/logout")

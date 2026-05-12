@@ -9,11 +9,12 @@ from uuid import uuid4
 from src.utils.logger import Timer, get_logger as _get_logger
 from typing import AsyncGenerator
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from agent.graph import graph
 from agent.models import KnowledgeGraphState, QueryInput
+from src.auth.deps import get_current_user
 
 logger = _get_logger(__name__)
 
@@ -109,14 +110,25 @@ async def _event_generator(
 
 
 @router.post("/query")
-async def query_endpoint(query_input: QueryInput) -> StreamingResponse:
+async def query_endpoint(
+    query_input: QueryInput,
+    user: dict = Depends(get_current_user),
+) -> StreamingResponse:
+    # Enforce server-side team_id and channel IDs — never trust the client body.
+    # model_copy creates a new immutable instance with the overridden fields.
+    query_input = query_input.model_copy(update={
+        "team_id":             user.get("team_id", query_input.team_id),
+        "allowed_channel_ids": user.get("allowed_channel_ids", []),
+    })
+
     queue: asyncio.Queue = asyncio.Queue()
     logger.info(
         "query_start",
         extra={
-            "session_id": query_input.session_id,
-            "team_id":    query_input.team_id,
-            "query_len":  len(query_input.query),
+            "session_id":   query_input.session_id,
+            "team_id":      query_input.team_id,
+            "channels":     len(query_input.allowed_channel_ids),
+            "query_len":    len(query_input.query),
         },
     )
 

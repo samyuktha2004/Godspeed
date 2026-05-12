@@ -47,7 +47,11 @@ async def doc_search_node(state: KnowledgeGraphState) -> dict:
     error: str | None = None
 
     try:
-        chunks = await run_doc_search(task_input, state.query_input.team_id)
+        chunks = await run_doc_search(
+            task_input,
+            state.query_input.team_id,
+            state.query_input.allowed_channel_ids or None,
+        )
     except Exception as exc:
         logger.exception("doc_search_node error")
         error = str(exc)
