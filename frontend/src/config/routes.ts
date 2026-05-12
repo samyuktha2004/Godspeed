@@ -14,6 +14,7 @@ const QueryPage   = lazy(() => import('@/pages/QueryPage'))
 const Analytics   = lazy(() => import('@/pages/AnalyticsPage'))
 const Admin       = lazy(() => import('@/pages/AdminPage'))
 const Workspace   = lazy(() => import('@/pages/WorkspacePage'))
+const Settings    = lazy(() => import('@/pages/SettingsPage'))
 const Login       = lazy(() => import('@/pages/LoginPage'))
 const NotFound    = lazy(() => import('@/pages/NotFoundPage'))
 
@@ -69,6 +70,13 @@ export const workspaceRoute = createRoute({
   component:      Workspace,
 })
 
+export const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/settings',
+  beforeLoad:     requireAuth,
+  component:      Settings,
+})
+
 export const notFoundRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '*',
@@ -82,6 +90,7 @@ const routeTree = rootRoute.addChildren([
   analyticsRoute,
   adminRoute,
   workspaceRoute,
+  settingsRoute,
   notFoundRoute,
 ])
 

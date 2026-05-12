@@ -184,6 +184,62 @@ Built: `QueryHistory.tsx` (expandable rows, success indicator, replay handler, p
 
 ---
 
+## ⏳ Group 13 — Settings & Admin Workspace (UI done, backend TBD)
+
+### Frontend Built:
+- **SettingsDashboard** (`components/settings/SettingsDashboard.tsx`) — main page with tabs
+  - `SettingsProfile.tsx` — name, email, password change
+  - `SettingsPreferences.tsx` — dark mode, notifications, query settings
+  - `SettingsApiKeys.tsx` — add/list/revoke API keys (form + list with masked secrets)
+- **AdminWorkspace** (`components/admin/AdminWorkspace.tsx`) — admin panel (role-gated for admin/manager)
+  - `AdminUserManagement.tsx` — add single user + bulk CSV/Excel import
+  - `AdminChannelManagement.tsx` — create channels with sensitivity levels (public/internal/confidential/restricted)
+  - `AdminAuditLog.tsx` — query + admin audit log with filters + CSV export
+  - `AdminWorkspaceSettings.tsx` — workspace name, slug, limits
+- Route: `settingsRoute` added to `config/routes.ts`; `/settings` link added to NavBar
+- Types: `types/settings.ts` with ApiKey, AuditLogEntry, UserInvite, Channel interfaces
+
+### Backend Endpoints Needed:
+
+**Auth/Profile:**
+- [ ] `PATCH /api/auth/profile` — update name (email is immutable)
+- [ ] `POST /api/auth/change-password` — requires current_password, new_password
+
+**API Keys:**
+- [ ] `GET /api/settings/api-keys` — list user's keys (masked, last_used_at, created_at)
+- [ ] `POST /api/settings/api-keys` — create new key (provider, name, encrypted_key)
+- [ ] `DELETE /api/settings/api-keys/{id}` — revoke key + log to audit_log
+
+**Workspace Users:**
+- [ ] `GET /api/workspace/users` — list all users (role-filtered: admins see all, others see their team)
+- [ ] `POST /api/workspace/users` — invite single user (email, name, role, team_id, channel_ids)
+- [ ] `POST /api/workspace/users/bulk-import` — CSV/Excel upload (parse, validate, send invites)
+- [ ] `PATCH /api/workspace/users/{user_id}` — change role, reassign team, toggle active status
+- [ ] `DELETE /api/workspace/users/{user_id}` — soft-delete (deactivate) user
+
+**Workspace Channels:**
+- [ ] `GET /api/workspace/channels` — list all channels (RLS: only visible channels to user)
+- [ ] `POST /api/workspace/channels` — create channel (name, sensitivity, source_type, team_id)
+- [ ] `PATCH /api/workspace/channels/{channel_id}` — edit name, sensitivity, role grants
+- [ ] `DELETE /api/workspace/channels/{channel_id}` — soft-delete (mark inactive)
+
+**Audit Log:**
+- [ ] `GET /api/audit-log?action=X&target_type=Y&limit=50` — fetch audit entries (role-filtered)
+- [ ] `GET /api/audit-log/export?format=csv` — export CSV (admin only)
+
+**Database Tables Needed:**
+- [ ] `api_keys (id, user_id, workspace_id, provider, name, encrypted_key, created_at, last_used_at, is_active)`
+- [ ] RLS policy on `api_keys`: users see only their own
+
+**Encryption:**
+- [ ] Store API keys encrypted in DB using `cryptography.fernet` or similar (key from env var)
+- [ ] Never log decrypted secrets; log only provider + name + action
+
+**Audit Trail:**
+- [ ] All mutations log to `rbac_audit_log` (action: `invite_user`, `bulk_user_import`, `change_role`, `grant_channel`, `revoke_channel`, etc.)
+
+---
+
 ## Scale & Future-Proofing Plan
 
 > These are not MVP blockers. Address them once Groups 6–10 are functional. Ordered by impact-to-effort ratio.

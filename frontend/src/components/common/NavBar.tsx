@@ -10,6 +10,7 @@ const NAV_LINKS = [
   { to: '/workspace', label: 'History'   },
   { to: '/analytics', label: 'Analytics' },
   { to: '/admin',     label: 'Admin'     },
+  { to: '/settings',  label: 'Settings'  },
 ]
 
 export function NavBar() {
