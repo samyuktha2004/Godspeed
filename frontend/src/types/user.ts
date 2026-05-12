@@ -6,12 +6,13 @@ export interface Team {
 }
 
 export interface User {
-  id:          string
-  email:       string
-  name:        string
-  role:        Role
-  team_id:     string
-  team?:       Team
-  is_new_hire: boolean
-  mentor_id?:  string
+  id:                  string
+  email:               string
+  name:                string
+  role:                Role
+  team_id:             string
+  team?:               Team
+  is_new_hire:         boolean
+  mentor_id?:          string
+  allowed_channel_ids?: string[]
 }

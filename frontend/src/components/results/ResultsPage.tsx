@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearch } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/authStore'
+import { useUIStore } from '@/stores/uiStore'
 import { useSSEStream } from '@/hooks/useSSEStream'
 import { useGraphStream } from '@/hooks/useGraphStream'
 import { HallucinationWarning } from '@/components/common/HallucinationWarning'
@@ -28,6 +29,7 @@ type Tab = 'graph' | 'answer'
 
 export function ResultsPage() {
   const user       = useAuthStore((s) => s.user)
+  const { graphCollapsed, toggleGraphCollapsed } = useUIStore()
   const sessionRef = useRef(crypto.randomUUID())
   const { q: initialQuery } = useSearch({ from: '/query' })
 
@@ -52,7 +54,9 @@ export function ResultsPage() {
   const edgesAccRef = useRef<GraphEdge[]>([])
 
   // ── Mobile tab ──────────────────────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState<Tab>('graph')
+  const [activeTab, setActiveTab]       = useState<Tab>('graph')
+  // Local — not persisted; maximize is a session-level power-user action
+  const [graphMaximized, setGraphMaximized] = useState(false)
 
   // ── Hooks ───────────────────────────────────────────────────────────────────
   const { state, error, firstEventArrived, stream } = useSSEStream()
@@ -231,14 +235,27 @@ export function ResultsPage() {
             </button>
           </div>
 
-          {/* Two-column grid — graph right, answer left */}
-          <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[1fr_380px] lg:items-start lg:gap-8">
+          {/* Two-column grid — collapses to single when graph is hidden */}
+          <div className={cn(
+            'flex flex-col gap-6 lg:grid lg:items-start lg:gap-8',
+            graphCollapsed ? 'lg:grid-cols-1' : 'lg:grid-cols-[1fr_380px]',
+          )}>
 
             {/* ── Left: answer column ──────────────────────────────────────── */}
             <div className={cn(
               'flex flex-col gap-6',
               activeTab === 'graph' && 'hidden lg:flex',
             )}>
+
+              {/* Show-graph chip — visible on desktop when graph panel is collapsed */}
+              {graphCollapsed && (
+                <button
+                  onClick={toggleGraphCollapsed}
+                  className="hidden lg:inline-flex w-fit items-center gap-1.5 rounded-full border border-surface-subtle bg-stone-50 px-3 py-1 text-xs text-stone-500 hover:bg-stone-100 dark:bg-stone-800/60 dark:hover:bg-stone-700"
+                >
+                  ▶ Show graph
+                </button>
+              )}
 
               {/* Thinking indicator — before any SSE event arrives */}
               {isActive && !hasData && (
@@ -308,56 +325,82 @@ export function ResultsPage() {
               {isComplete && <FollowUp onSubmit={runQuery} />}
             </div>
 
-            {/* ── Right: graph column — always mounted ─────────────────────── */}
-            {/* CSS hides it on mobile when answer tab is active; on desktop always visible */}
+            {/* ── Right: graph panel ───────────────────────────────────────── */}
+            {/* On mobile: controlled by activeTab. On desktop: hidden when graphCollapsed */}
             <div className={cn(
-              'flex flex-col gap-2',
-              activeTab === 'answer' && 'hidden lg:flex',
+              'flex flex-col overflow-hidden rounded-xl border border-surface-subtle',
+              // Mobile: toggle by tab; desktop: toggle by collapsed state
+              activeTab === 'answer' ? 'hidden lg:flex' : 'flex',
+              graphCollapsed && 'lg:hidden',
+              // Maximized: fixed fullscreen overlay
+              graphMaximized
+                ? 'fixed inset-0 z-50 rounded-none border-0 bg-white dark:bg-stone-950'
+                : 'h-[440px]',
             )}>
+
+              {/* Graph toolbar */}
+              <div className="flex shrink-0 items-center gap-2 border-b border-surface-subtle px-3 py-2">
+                <span className="flex-1 text-xs font-semibold uppercase tracking-wide text-stone-400">
+                  Knowledge Graph
+                </span>
+                {graphNodes.length > 0 && (
+                  <span className="text-xs text-stone-400">
+                    {graphNodes.length} nodes · {graphEdges.length} edges
+                  </span>
+                )}
+                {/* Maximize / restore */}
+                <button
+                  onClick={() => setGraphMaximized((m) => !m)}
+                  title={graphMaximized ? 'Exit fullscreen' : 'Fullscreen'}
+                  className="rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-600 dark:hover:bg-stone-800 dark:hover:text-stone-300"
+                  aria-label={graphMaximized ? 'Exit fullscreen' : 'Fullscreen'}
+                >
+                  {graphMaximized ? '⤡' : '⤢'}
+                </button>
+                {/* Collapse — desktop only; on mobile graph visibility is via tabs */}
+                <button
+                  onClick={toggleGraphCollapsed}
+                  title="Collapse graph"
+                  className="hidden rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-600 dark:hover:bg-stone-800 dark:hover:text-stone-300 lg:block"
+                  aria-label="Collapse graph"
+                >
+                  ◀
+                </button>
+              </div>
+
+              {/* Canvas — flex-1 fills remaining panel height */}
               <KnowledgeGraph
                 nodes={graphNodes}
                 edges={graphEdges}
                 streaming={isActive}
                 onNodeClick={handleNodeClick}
                 onNodeHover={handleNodeHover}
+                className="flex-1"
               />
 
-              {/* Graph footer: node count + refresh/reload controls */}
-              <div className="flex items-center gap-2">
-                {graphNodes.length > 0 && (
-                  <p className="flex-1 text-xs text-stone-400">
-                    {graphNodes.length} node{graphNodes.length !== 1 ? 's' : ''}
-                    {' · '}
-                    {graphEdges.length} connection{graphEdges.length !== 1 ? 's' : ''}
-                  </p>
-                )}
-
-                {/* Refresh button — available when graph finished streaming (data may have updated) */}
+              {/* Graph footer */}
+              <div className="flex shrink-0 items-center gap-2 border-t border-surface-subtle px-3 py-2">
                 {gState === 'done' && (
                   <button
                     onClick={reconnectGraph}
-                    className="ml-auto shrink-0 text-xs text-stone-400 hover:text-stone-600 dark:hover:text-stone-300"
+                    className="ml-auto text-xs text-stone-400 hover:text-stone-600 dark:hover:text-stone-300"
                     title="Reload graph with latest data"
                   >
-                    ↻ Refresh graph
+                    ↻ Refresh
                   </button>
                 )}
+                {gState === 'retrying' && <NetworkRetry attempt={retryCount + 1} />}
               </div>
 
-              {/* Auto-retry indicator */}
-              {gState === 'retrying' && (
-                <NetworkRetry attempt={retryCount + 1} />
-              )}
-
-              {/* Manual reload after max retries exhausted */}
+              {/* Max-retries error bar */}
               {gState === 'error' && (
-                <div className="flex items-center justify-between rounded-lg border border-stone-200 bg-stone-50 px-4 py-3 text-sm dark:border-stone-700 dark:bg-stone-800/40">
-                  <span className="text-stone-600 dark:text-stone-400">
+                <div className="flex shrink-0 items-center justify-between border-t border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-700 dark:bg-stone-800/40">
+                  <span className="text-stone-500 dark:text-stone-400">
                     Couldn't load the knowledge graph.
                   </span>
                   <button
                     onClick={reconnectGraph}
-                    className="ml-4 shrink-0 rounded bg-stone-200 px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-stone-300 dark:bg-stone-700 dark:text-stone-300 dark:hover:bg-stone-600"
+                    className="ml-4 shrink-0 rounded bg-stone-200 px-3 py-1 text-xs font-medium text-stone-700 hover:bg-stone-300 dark:bg-stone-700 dark:text-stone-300 dark:hover:bg-stone-600"
                   >
                     Try again
                   </button>

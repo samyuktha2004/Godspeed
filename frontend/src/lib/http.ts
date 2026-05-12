@@ -130,9 +130,8 @@ export async function ssePost(
   body: unknown,
   signal: AbortSignal,
 ): Promise<Response> {
-  let res: Response
-  try {
-    res = await fetch(`${env.apiBaseUrl}${path}`, {
+  const doFetch = () =>
+    fetch(`${env.apiBaseUrl}${path}`, {
       method:      'POST',
       credentials: 'include',
       signal,
@@ -143,10 +142,29 @@ export async function ssePost(
       },
       body: JSON.stringify(body),
     })
+
+  let res: Response
+  try {
+    res = await doFetch()
   } catch (err) {
     if ((err as Error).name === 'AbortError') throw err
     useUIStore.getState().addToast({ type: 'error', message: 'No connection to server' })
     throw new ApiError(0, 'Network error')
+  }
+
+  if (res.status === 401) {
+    const refreshed = await refreshToken()
+    if (!refreshed) {
+      useAuthStore.getState().logout()
+      window.location.href = '/login'
+      throw new ApiError(401, 'Session expired')
+    }
+    try {
+      res = await doFetch()
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') throw err
+      throw new ApiError(0, 'Network error after token refresh')
+    }
   }
 
   if (!res.ok) {

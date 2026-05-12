@@ -4,6 +4,7 @@ interface Props {
 
 const SUGGESTIONS = [
   'Try broader terms — remove acronyms or product names',
+  'Results may be limited based on your channel access — ask your admin if you need broader access',
   'Check if the data source containing this topic is connected',
   'Ask your admin to verify ingestion status for that area',
 ]

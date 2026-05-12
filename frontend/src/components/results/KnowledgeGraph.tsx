@@ -33,11 +33,12 @@ interface Props {
   streaming:   boolean   // true while SSE/WS is active (drives the empty state animation)
   onNodeClick: (node: GraphNode) => void
   onNodeHover: (node: GraphNode | null, x: number, y: number) => void
+  className?:  string
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export function KnowledgeGraph({ nodes, edges, streaming, onNodeClick, onNodeHover }: Props) {
+export function KnowledgeGraph({ nodes, edges, streaming, onNodeClick, onNodeHover, className }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null)
@@ -60,20 +61,21 @@ export function KnowledgeGraph({ nodes, edges, streaming, onNodeClick, onNodeHov
   // Initialise the canvas once on mount
   useEffect(() => {
     if (!containerRef.current) return
+    let ro: ResizeObserver | null = null
 
     import('force-graph').then(({ default: ForceGraph2D }) => {
       if (!containerRef.current) return
 
+      const el = containerRef.current
       const fg = ForceGraph2D()
-      fg(containerRef.current)
+      fg(el)
       fg.backgroundColor('transparent')
         .nodeId('id')
         .nodeLabel('name')
         .nodeColor((n: FGNode) => n.color)
         .nodeRelSize(6)
-        // Use fixed dimensions — container may be display:none on mobile tab switch
-        .width(containerRef.current.clientWidth || 380)
-        .height(containerRef.current.clientHeight || 400)
+        .width(el.clientWidth || 380)
+        .height(el.clientHeight || 400)
         .linkColor(() => '#94a3b8')
         .linkLabel('rel')
         .linkDirectionalArrowLength(4)
@@ -86,11 +88,21 @@ export function KnowledgeGraph({ nodes, edges, streaming, onNodeClick, onNodeHov
         })
       graphRef.current = fg
 
+      // Auto-resize the canvas when the container is resized (e.g. maximize/collapse)
+      ro = new ResizeObserver((entries) => {
+        const { width, height } = entries[0].contentRect
+        if (width > 0 && height > 0) {
+          fg.width(width).height(height)
+        }
+      })
+      ro.observe(el)
+
       // Flush any nodes/edges that arrived while the canvas was initialising
       pushData(pendingRef.current.nodes, pendingRef.current.edges)
     })
 
     return () => {
+      ro?.disconnect()
       graphRef.current?._destructor?.()
       graphRef.current = null
     }
@@ -106,7 +118,7 @@ export function KnowledgeGraph({ nodes, edges, streaming, onNodeClick, onNodeHov
   const isEmpty = nodes.length === 0
 
   return (
-    <div className="relative h-[400px] w-full overflow-hidden rounded-xl border border-surface-subtle">
+    <div className={`relative h-full w-full overflow-hidden${className ? ` ${className}` : ''}`}>
 
       {/* Empty state overlay — removed once first node arrives */}
       {isEmpty && (
