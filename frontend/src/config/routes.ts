@@ -9,14 +9,15 @@ import { lazy } from 'react'
 import App from '@/App'
 import { useAuthStore } from '@/stores/authStore'
 
-const Home        = lazy(() => import('@/pages/Home'))
-const QueryPage   = lazy(() => import('@/pages/QueryPage'))
-const Analytics   = lazy(() => import('@/pages/AnalyticsPage'))
-const Admin       = lazy(() => import('@/pages/AdminPage'))
-const Workspace   = lazy(() => import('@/pages/WorkspacePage'))
-const Settings    = lazy(() => import('@/pages/SettingsPage'))
-const Login       = lazy(() => import('@/pages/LoginPage'))
-const NotFound    = lazy(() => import('@/pages/NotFoundPage'))
+const Home          = lazy(() => import('@/pages/Home'))
+const QueryPage     = lazy(() => import('@/pages/QueryPage'))
+const Analytics     = lazy(() => import('@/pages/AnalyticsPage'))
+const Admin         = lazy(() => import('@/pages/AdminPage'))
+const Workspace     = lazy(() => import('@/pages/WorkspacePage'))
+const Settings      = lazy(() => import('@/pages/SettingsPage'))
+const Login         = lazy(() => import('@/pages/LoginPage'))
+const OAuthCallback = lazy(() => import('@/pages/OAuthCallbackPage'))
+const NotFound      = lazy(() => import('@/pages/NotFoundPage'))
 
 const requireAuth = () => {
   if (!useAuthStore.getState().isAuthenticated) {
@@ -30,6 +31,16 @@ export const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
   component: Login,
+})
+
+export const oauthCallbackRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/auth/callback',
+  component: OAuthCallback,
+  validateSearch: (s: Record<string, unknown>) => ({
+    oauth: typeof s.oauth === 'string' ? s.oauth : undefined,
+    error: typeof s.error === 'string' ? s.error : undefined,
+  }),
 })
 
 export const homeRoute = createRoute({
@@ -85,6 +96,7 @@ export const notFoundRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
+  oauthCallbackRoute,
   homeRoute,
   queryRoute,
   analyticsRoute,

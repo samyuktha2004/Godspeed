@@ -107,6 +107,12 @@ class Settings(BaseSettings):
     # Set True when running behind HTTPS so session cookies are Secure
     cookie_secure: bool = Field(default=False)
 
+    # Google OAuth2 / SSO
+    google_oauth_client_id:     str = Field(default="")
+    google_oauth_client_secret: str = Field(default="")
+    google_oauth_redirect_uri:  str = Field(default="http://localhost:8000/api/auth/google/callback")
+    frontend_url:               str = Field(default="http://localhost:3000")
+
     # CORS — comma-separated list of allowed origins.
     # NOTE: cannot be "*" when allow_credentials=True (CORS spec requirement).
     cors_origins: str = Field(default="http://localhost:5173,http://localhost:3000")

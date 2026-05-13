@@ -95,6 +95,81 @@ def get_user_team_id(user_id: str) -> Optional[str]:
         return None
 
 
+_DEFAULT_WORKSPACE_ID = "00000000-0000-0000-0000-000000000001"
+
+_OAUTH_USER_FIELDS = (
+    "id, workspace_id, email, name, password_hash, role, "
+    "is_new_hire, is_active, oauth_provider, oauth_sub"
+)
+
+
+def get_or_create_oauth_user(email: str, name: str, oauth_sub: str) -> Optional[dict]:
+    """Find or create a Supabase user for a Google OAuth login.
+
+    Resolution order:
+      1. Existing row matched by (oauth_provider='google', oauth_sub) — returning SSO user.
+      2. Existing active row matched by email — links Google sub to a password account.
+      3. No match — creates a new SSO-only user (password_hash=None).
+    """
+    try:
+        sb = _client()
+
+        # 1. Match by oauth_sub (fastest path for returning SSO users)
+        result = (
+            sb.table("users")
+            .select(_OAUTH_USER_FIELDS)
+            .eq("oauth_provider", "google")
+            .eq("oauth_sub", oauth_sub)
+            .eq("is_active", True)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            return result.data[0]
+
+        # 2. Match by email — link Google sub to an existing password-based account
+        result = (
+            sb.table("users")
+            .select(_OAUTH_USER_FIELDS)
+            .eq("email", email.lower())
+            .eq("is_active", True)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            user = result.data[0]
+            sb.table("users").update({
+                "oauth_provider": "google",
+                "oauth_sub":      oauth_sub,
+            }).eq("id", user["id"]).execute()
+            user["oauth_provider"] = "google"
+            user["oauth_sub"]      = oauth_sub
+            logger.info("auth_db: linked google oauth to existing user %s", email)
+            return user
+
+        # 3. Create new SSO-only user (no password)
+        insert_result = (
+            sb.table("users")
+            .insert({
+                "workspace_id":   _DEFAULT_WORKSPACE_ID,
+                "email":          email.lower(),
+                "name":           name,
+                "password_hash":  None,
+                "role":           "engineer",
+                "is_new_hire":    False,
+                "oauth_provider": "google",
+                "oauth_sub":      oauth_sub,
+            })
+            .execute()
+        )
+        logger.info("auth_db: created new oauth user %s", email)
+        return insert_result.data[0] if insert_result.data else None
+
+    except Exception:
+        logger.exception("auth_db: get_or_create_oauth_user failed for %s", email)
+        return None
+
+
 def record_audit(
     actor_id: Optional[str],
     action: str,
