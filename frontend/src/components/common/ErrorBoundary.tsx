@@ -4,13 +4,13 @@ interface Props   { children: ReactNode }
 interface State   { error: Error | null }
 
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null }
+  override state: State = { error: null }
 
   static getDerivedStateFromError(error: Error): State {
     return { error }
   }
 
-  render() {
+  override render() {
     if (this.state.error) {
       return (
         <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-8 text-center">

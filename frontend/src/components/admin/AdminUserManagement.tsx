@@ -187,7 +187,7 @@ export function AdminUserManagement() {
       <div>
         <h4 className="mb-3 text-sm font-semibold">Active Users</h4>
         {isLoading ? (
-          <LoadingSkeleton count={5} height="h-10" />
+          <LoadingSkeleton rows={5} className="h-10" />
         ) : users && users.length > 0 ? (
           <div className="overflow-x-auto rounded-lg border border-stone-200 dark:border-stone-700">
             <table className="w-full text-left text-sm">

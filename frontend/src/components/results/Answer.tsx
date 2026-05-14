@@ -60,12 +60,12 @@ export function Answer({ text, className }: Props) {
         components={{
           // pre wraps fenced code blocks — delegate to CodeBlock
           pre: ({ children }) => <>{children}</>,
-          code: (({ className: cls, children, node, ...props }) => {
-            // If parent is <pre>, it's a fenced block; otherwise inline
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          code: (({ className: cls, children, node, ...props }: any) => {
             const isBlock = node?.position && String(children).includes('\n')
             if (isBlock) return <CodeBlock className={cls} {...props}>{children}</CodeBlock>
             return <InlineCode className={cls} {...props}>{children}</InlineCode>
-          }) as never,
+          }),
         }}
       >
         {text}

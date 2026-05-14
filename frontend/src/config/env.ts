@@ -1,5 +1,6 @@
 const get = (key: string): string => {
-  const val = import.meta.env[key]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const val = (import.meta as any).env[key]
   if (!val) throw new Error(`Missing env var: ${key}`)
   return val
 }

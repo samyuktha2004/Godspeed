@@ -111,7 +111,7 @@ export function AdminAuditLog() {
       <div>
         <h3 className="mb-3 text-sm font-semibold">Recent Activity</h3>
         {isLoading ? (
-          <LoadingSkeleton count={5} height="h-12" />
+          <LoadingSkeleton rows={5} className="h-12" />
         ) : auditEntries && auditEntries.length > 0 ? (
           <div className="space-y-2 rounded-lg border border-stone-200 dark:border-stone-700">
             {auditEntries.map((entry) => (

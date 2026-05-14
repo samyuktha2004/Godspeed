@@ -1,7 +1,9 @@
 import { useUIStore } from '@/stores/uiStore'
 
 export function SettingsPreferences() {
-  const { isDarkMode, toggleDarkMode } = useUIStore()
+  const theme       = useUIStore((s) => s.theme)
+  const toggleTheme = useUIStore((s) => s.toggleTheme)
+  const isDarkMode  = theme === 'dark'
 
   return (
     <div className="space-y-6 p-6">
@@ -14,7 +16,7 @@ export function SettingsPreferences() {
             <p className="text-xs text-stone-600 dark:text-stone-400">Use dark theme for reduced eye strain</p>
           </div>
           <button
-            onClick={toggleDarkMode}
+            onClick={toggleTheme}
             className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
               isDarkMode
                 ? 'bg-brand'

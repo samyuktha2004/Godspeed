@@ -149,7 +149,7 @@ export function AdminChannelManagement() {
       {/* Channels List */}
       <div>
         {isLoading ? (
-          <LoadingSkeleton count={4} height="h-16" />
+          <LoadingSkeleton rows={4} className="h-16" />
         ) : channels && channels.length > 0 ? (
           <div className="grid gap-3">
             {channels.map((channel) => (

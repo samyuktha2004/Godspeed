@@ -83,8 +83,8 @@ export function useSSEStream() {
             try {
               const data = JSON.parse(dataLine)
               malformedCount = 0
-              // @ts-expect-error — dynamic dispatch; callers are typed via Callbacks
-              callbacks[eventName]?.(data)
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              ;(callbacks as any)[eventName]?.(data)
 
               if (eventName === 'done') {
                 completedRef.current = true

@@ -32,7 +32,7 @@ export function SettingsApiKeys() {
     mutationFn: async (input: CreateApiKeyInput) => {
       // TODO: POST /api/settings/api-keys
       console.log('Create API key:', input)
-      return { id: 'new-key', ...input } as ApiKey
+      return { id: 'new-key', ...input, created_at: new Date().toISOString(), is_active: true } as ApiKey
     },
     onSuccess: () => {
       setShowForm(false)
@@ -160,7 +160,7 @@ export function SettingsApiKeys() {
       <div>
         <h4 className="mb-3 text-sm font-semibold">Connected Keys</h4>
         {isLoading ? (
-          <LoadingSkeleton count={3} height="h-12" />
+          <LoadingSkeleton rows={3} className="h-12" />
         ) : keys && keys.length > 0 ? (
           <div className="space-y-2">
             {keys.map((key) => (

@@ -63,7 +63,8 @@ export function KnowledgeGraph({ nodes, edges, streaming, onNodeClick, onNodeHov
     if (!containerRef.current) return
     let ro: ResizeObserver | null = null
 
-    import('force-graph').then(({ default: ForceGraph2D }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    import('force-graph').then(({ default: ForceGraph2D }: any) => {
       if (!containerRef.current) return
 
       const el = containerRef.current
@@ -90,7 +91,9 @@ export function KnowledgeGraph({ nodes, edges, streaming, onNodeClick, onNodeHov
 
       // Auto-resize the canvas when the container is resized (e.g. maximize/collapse)
       ro = new ResizeObserver((entries) => {
-        const { width, height } = entries[0].contentRect
+        const entry = entries[0]
+        if (!entry) return
+        const { width, height } = entry.contentRect
         if (width > 0 && height > 0) {
           fg.width(width).height(height)
         }

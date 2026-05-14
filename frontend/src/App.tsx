@@ -47,7 +47,7 @@ export default function App() {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault()
-        navigate({ to: '/query' })
+        navigate({ to: '/query', search: { q: undefined } })
       }
     }
     window.addEventListener('keydown', handler)
