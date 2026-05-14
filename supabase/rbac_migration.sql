@@ -44,15 +44,22 @@ create index if not exists users_workspace_email_idx on users (workspace_id, ema
 create index if not exists users_role_idx            on users (role);
 
 
--- ── Extend existing teams table ──────────────────────────────
--- The base schema has teams(team_id text PK, cag_snapshot, snapshot_at, created_at).
--- We add workspace linkage and display fields.
+-- ── Teams table ──────────────────────────────────────────────
+-- Create teams with team_id PK if it doesn't already exist.
+-- (schema.sql defines this; this block is a safety net if schema.sql was skipped.)
+create table if not exists teams (
+    team_id      text        primary key,
+    cag_snapshot text,
+    snapshot_at  timestamptz,
+    created_at   timestamptz not null default now()
+);
+
+-- Extend existing teams table with RBAC columns.
 alter table teams add column if not exists workspace_id uuid references workspaces(id) on delete cascade;
 alter table teams add column if not exists name         text;
 alter table teams add column if not exists slug         text;
 
 -- Ensure the default team row exists, then backfill the new columns.
--- Insert is a no-op if team_id='default' already exists.
 insert into teams (team_id, workspace_id, name, slug)
 values ('default', '00000000-0000-0000-0000-000000000001', 'Engineering', 'engineering')
 on conflict (team_id) do update
