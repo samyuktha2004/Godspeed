@@ -16,8 +16,9 @@ const Admin         = lazy(() => import('@/pages/AdminPage'))
 const Workspace     = lazy(() => import('@/pages/WorkspacePage'))
 const Settings      = lazy(() => import('@/pages/SettingsPage'))
 const Login         = lazy(() => import('@/pages/LoginPage'))
-const OAuthCallback = lazy(() => import('@/pages/OAuthCallbackPage'))
-const NotFound      = lazy(() => import('@/pages/NotFoundPage'))
+const OAuthCallback   = lazy(() => import('@/pages/OAuthCallbackPage'))
+const AcceptInvite    = lazy(() => import('@/pages/AcceptInvitePage'))
+const NotFound        = lazy(() => import('@/pages/NotFoundPage'))
 
 const requireAuth = () => {
   if (!useAuthStore.getState().isAuthenticated) {
@@ -88,6 +89,15 @@ export const settingsRoute = createRoute({
   component:      Settings,
 })
 
+export const acceptInviteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/accept-invite',
+  component: AcceptInvite,
+  validateSearch: (s: Record<string, unknown>) => ({
+    token: typeof s.token === 'string' ? s.token : '',
+  }),
+})
+
 export const notFoundRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '*',
@@ -97,6 +107,7 @@ export const notFoundRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   loginRoute,
   oauthCallbackRoute,
+  acceptInviteRoute,
   homeRoute,
   queryRoute,
   analyticsRoute,

@@ -14,6 +14,7 @@ class RawDocument(BaseModel):
     source_url: str
     source_type: str
     team_id: str
+    channel_id: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     fetched_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -26,6 +27,7 @@ class DocumentChunk(BaseModel):
     source_type: str
     team_id: str
     chunk_index: int
+    channel_id: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -37,6 +39,7 @@ class EmbeddedChunk(BaseModel):
     source_type: str
     team_id: str
     chunk_index: int
+    channel_id: Optional[str] = None
     dense_vector: list[float]
     sparse_indices: list[int]
     sparse_values: list[float]
@@ -65,18 +68,21 @@ class IngestJobRecord(BaseModel):
 class IngestSourcePayload(BaseModel):
     source_type: Literal["confluence", "github", "pdf", "jira"]
     team_id: str
+    channel_id: Optional[str] = None
     params: dict[str, Any] = Field(default_factory=dict)
 
 
 class ConfluenceIngestRequest(BaseModel):
     space_key: str
     team_id: str
+    channel_id: Optional[str] = None
     page_ids: Optional[list[str]] = None
 
 
 class GithubIngestRequest(BaseModel):
     repo_url: str
     team_id: str
+    channel_id: Optional[str] = None
     path_filter: str = "docs/"
     branch: str = "main"
 

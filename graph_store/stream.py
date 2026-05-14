@@ -11,7 +11,11 @@ from graph_store.config import settings
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["graph"])
 
-_SNAPSHOT_QUERY = """
+# ---------------------------------------------------------------------------
+# Cypher queries
+# ---------------------------------------------------------------------------
+
+_SNAPSHOT_QUERY_UNFILTERED = """
 MATCH (n)
 WHERE NOT n:Chunk AND NOT n:Document AND n.name IS NOT NULL
 WITH n
@@ -26,10 +30,102 @@ RETURN
 ORDER BY from_name
 """
 
+_SNAPSHOT_QUERY_FILTERED = """
+MATCH (n)
+WHERE NOT n:Chunk AND NOT n:Document AND n.name IS NOT NULL
+WITH n
+MATCH (n)<-[:MENTIONS|REFERENCES|HAS_CHUNK]-(c:Chunk)
+WHERE c.channel_id IN $channel_ids OR c.channel_id IS NULL
+WITH DISTINCT n
+OPTIONAL MATCH (n)-[r]->(m)
+WHERE NOT m:Chunk AND NOT m:Document AND m.name IS NOT NULL
+  AND EXISTS {
+    MATCH (m)<-[:MENTIONS|REFERENCES|HAS_CHUNK]-(c2:Chunk)
+    WHERE c2.channel_id IN $channel_ids OR c2.channel_id IS NULL
+  }
+RETURN
+  labels(n)[0]  AS from_label,
+  n.name        AS from_name,
+  type(r)       AS rel_type,
+  labels(m)[0]  AS to_label,
+  m.name        AS to_name
+ORDER BY from_name
+"""
+
+
+# ---------------------------------------------------------------------------
+# Session helper — resolve gs_session cookie via Redis
+# ---------------------------------------------------------------------------
+
+def _parse_session_cookie(websocket: WebSocket) -> str | None:
+    """Extract the gs_session value from the WebSocket cookie header."""
+    # FastAPI/Starlette populates websocket.cookies from the Cookie header
+    session_id = websocket.cookies.get("gs_session")
+    if session_id:
+        return session_id
+    # Fallback: parse the raw Cookie header manually
+    cookie_header = websocket.headers.get("cookie", "")
+    for part in cookie_header.split(";"):
+        part = part.strip()
+        if part.startswith("gs_session="):
+            return part[len("gs_session="):]
+    return None
+
+
+async def _resolve_allowed_channels(websocket: WebSocket) -> list[str]:
+    """
+    Return the list of allowed channel IDs for the connecting user.
+
+    Falls back to an empty list (unfiltered view) if there is no cookie,
+    Redis is unavailable, or the session has expired.
+    """
+    from src.auth.router import _get_session  # local import to avoid circular deps
+
+    session_id = _parse_session_cookie(websocket)
+    if not session_id:
+        logger.warning("graph_stream: no gs_session cookie — serving unfiltered graph")
+        return []
+
+    try:
+        session = await _get_session(session_id)
+    except Exception as exc:
+        logger.warning("graph_stream: session resolution failed (%s) — serving unfiltered graph", exc)
+        return []
+
+    if not session:
+        logger.warning("graph_stream: session not found or expired — serving unfiltered graph")
+        return []
+
+    user = session.get("user", {})
+    allowed = user.get("allowed_channel_ids", [])
+    if not isinstance(allowed, list):
+        allowed = []
+    return allowed
+
+
+# ---------------------------------------------------------------------------
+# WebSocket handler
+# ---------------------------------------------------------------------------
 
 @router.websocket("/graph/stream")
 async def graph_stream(websocket: WebSocket):
     await websocket.accept()
+
+    # Resolve RBAC — fall back gracefully on any error
+    try:
+        allowed_channel_ids = await _resolve_allowed_channels(websocket)
+    except Exception as exc:
+        logger.warning("graph_stream: failed to resolve RBAC (%s) — serving unfiltered graph", exc)
+        allowed_channel_ids = []
+
+    use_filtered = bool(allowed_channel_ids)
+    if use_filtered:
+        logger.info(
+            "graph_stream: RBAC active — filtering to %d channel(s)", len(allowed_channel_ids)
+        )
+    else:
+        logger.info("graph_stream: no channel restriction — serving full graph")
+
     driver = AsyncGraphDatabase.driver(
         settings.neo4j_uri,
         auth=(settings.neo4j_username, settings.neo4j_password),
@@ -40,7 +136,12 @@ async def graph_stream(websocket: WebSocket):
     try:
         # Fetch all records at once (same pattern as traverse — avoids async-for issues)
         async with driver.session(database=settings.neo4j_database) as session:
-            result = await session.run(_SNAPSHOT_QUERY)
+            if use_filtered:
+                result = await session.run(
+                    _SNAPSHOT_QUERY_FILTERED, {"channel_ids": allowed_channel_ids}
+                )
+            else:
+                result = await session.run(_SNAPSHOT_QUERY_UNFILTERED, {})
             records = await result.data()
 
         seen_nodes: set[str] = set()

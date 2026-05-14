@@ -26,6 +26,7 @@ def upsert_document(doc: RawDocument, client: Optional[Client] = None) -> None:
                 "source_url": doc.source_url,
                 "source_type": doc.source_type,
                 "team_id": doc.team_id,
+                "channel_id": doc.channel_id,
                 "metadata": doc.metadata,
                 "last_commit_sha": doc.metadata.get("last_commit_sha"),
                 "updated_at": datetime.utcnow().isoformat(),
@@ -52,6 +53,7 @@ def upsert_chunks(chunks: list[DocumentChunk], client: Optional[Client] = None) 
                 "source_type": c.source_type,
                 "team_id": c.team_id,
                 "chunk_index": c.chunk_index,
+                "channel_id": c.channel_id,
             }
             for c in chunks
         ]

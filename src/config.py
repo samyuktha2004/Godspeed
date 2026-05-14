@@ -113,6 +113,13 @@ class Settings(BaseSettings):
     google_oauth_redirect_uri:  str = Field(default="http://localhost:8000/api/auth/google/callback")
     frontend_url:               str = Field(default="http://localhost:3000")
 
+    # SMTP — leave smtp_host/smtp_user blank to disable email sending
+    smtp_host:     str = Field(default="")
+    smtp_port:     int = Field(default=587)
+    smtp_user:     str = Field(default="")
+    smtp_password: str = Field(default="")
+    smtp_from:     str = Field(default="noreply@godspeed.local")
+
     # CORS — comma-separated list of allowed origins.
     # NOTE: cannot be "*" when allow_credentials=True (CORS spec requirement).
     cors_origins: str = Field(default="http://localhost:5173,http://localhost:3000")

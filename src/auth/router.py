@@ -10,10 +10,11 @@ from uuid import uuid4
 
 import httpx
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Cookie, HTTPException, Query, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
+from src.auth.email import send_email
 from src.config import settings
 from src.utils.logger import get_logger
 
@@ -351,3 +352,268 @@ async def google_callback(
     )
     redirect_resp.set_cookie(key=COOKIE_NAME, value=session_id, **_make_cookie_kwargs())
     return redirect_resp
+
+
+# ---------------------------------------------------------------------------
+# Email invite flow
+# ---------------------------------------------------------------------------
+
+_INVITE_TTL = 7 * 24 * 3600  # 7 days in seconds
+_DEFAULT_WORKSPACE_ID = "00000000-0000-0000-0000-000000000001"
+
+# Allowed roles that can send invitations
+_INVITE_ALLOWED_ROLES = {"admin", "org_admin"}
+
+
+async def _require_invite_role(gs_session: str | None = Cookie(default=None)) -> dict:
+    """Inline role guard (avoids circular import with deps.py)."""
+    if not gs_session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    session = await _get_session(gs_session)
+    if not session:
+        raise HTTPException(status_code=401, detail="Session expired")
+    user = session["user"]
+    if user.get("role") not in _INVITE_ALLOWED_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Role '{user.get('role')}' cannot send invitations",
+        )
+    return user
+
+
+class InviteRequest(BaseModel):
+    email: str
+    name:  str
+    role:  str = "engineer"
+
+
+class AcceptInviteRequest(BaseModel):
+    token:    str
+    password: str
+
+
+@router.post("/invite")
+async def send_invite(
+    body: InviteRequest,
+    caller: dict = Depends(_require_invite_role),
+) -> dict:
+    """Send an email invitation link. Requires admin or org_admin role."""
+    email = body.email.lower()
+
+    # Check the user doesn't already exist
+    try:
+        from src.auth.db import get_user_by_email
+        existing = get_user_by_email(email)
+        if existing:
+            raise HTTPException(status_code=409, detail=f"User {email} already exists")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.warning("invite: could not check existing user for %s — proceeding", email)
+
+    token = secrets.token_urlsafe(32)
+    payload = json.dumps({
+        "email":       email,
+        "name":        body.name,
+        "role":        body.role,
+        "invited_by":  caller["id"],
+    })
+
+    r = await _redis()
+    try:
+        await r.setex(f"gs:invite:{token}", _INVITE_TTL, payload)
+    finally:
+        await r.aclose()
+
+    invite_url = f"{settings.frontend_url}/accept-invite?token={token}"
+    html = (
+        f"<p>Hi {body.name},</p>"
+        f"<p>You've been invited to join <strong>GodSpeed</strong>.</p>"
+        f"<p><a href=\"{invite_url}\">Accept your invitation</a></p>"
+        f"<p>This link expires in 7 days.</p>"
+    )
+    send_email(to=email, subject="You're invited to GodSpeed", html=html)
+
+    logger.info("invite_sent to=%s by=%s role=%s", email, caller["id"], body.role)
+    return {"ok": True, "email": email}
+
+
+@router.get("/invite/{token}")
+async def get_invite(token: str) -> dict:
+    """Look up an invite token and return the display fields (no auth required)."""
+    r = await _redis()
+    try:
+        raw = await r.get(f"gs:invite:{token}")
+    finally:
+        await r.aclose()
+
+    if not raw:
+        raise HTTPException(status_code=404, detail="Invite not found or expired")
+
+    data = json.loads(raw)
+    return {
+        "email": data["email"],
+        "name":  data["name"],
+        "role":  data["role"],
+    }
+
+
+@router.post("/accept-invite")
+async def accept_invite(body: AcceptInviteRequest, response: Response) -> dict:
+    """Accept an invite, create the user account, and start a session."""
+    r = await _redis()
+    try:
+        raw = await r.get(f"gs:invite:{body.token}")
+        if not raw:
+            raise HTTPException(status_code=404, detail="Invite not found or expired")
+        invite = json.loads(raw)
+
+        import bcrypt
+        from src.auth.db import get_allowed_channel_ids, get_user_team_id
+
+        password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt()).decode()
+
+        # Insert user into Supabase
+        try:
+            from src.auth.db import _client as _db_client
+            insert_result = (
+                _db_client()
+                .table("users")
+                .insert({
+                    "workspace_id":  _DEFAULT_WORKSPACE_ID,
+                    "email":         invite["email"],
+                    "name":          invite["name"],
+                    "password_hash": password_hash,
+                    "role":          invite["role"],
+                    "is_new_hire":   True,
+                    "is_active":     True,
+                })
+                .execute()
+            )
+            db_user = insert_result.data[0] if insert_result.data else None
+            if not db_user:
+                raise RuntimeError("insert returned no data")
+        except Exception:
+            logger.exception("accept_invite: user insert failed for %s", invite["email"])
+            raise HTTPException(status_code=500, detail="Failed to create user account")
+
+        # One-time use — delete the invite key only after successful insert
+        await r.delete(f"gs:invite:{body.token}")
+
+        channel_ids = get_allowed_channel_ids(db_user["id"], db_user["role"])
+        team_id     = get_user_team_id(db_user["id"]) or "default"
+
+        user_obj = {
+            "id":                  db_user["id"],
+            "email":               db_user["email"],
+            "name":                db_user["name"],
+            "role":                db_user["role"],
+            "team_id":             team_id,
+            "team":                {"id": team_id, "name": team_id.capitalize()},
+            "is_new_hire":         db_user.get("is_new_hire", True),
+            "allowed_channel_ids": channel_ids,
+        }
+
+    finally:
+        await r.aclose()
+
+    session_id = str(uuid4())
+    stored = await _set_session(
+        session_id,
+        {"user": user_obj, "created_at": datetime.utcnow().isoformat()},
+    )
+    if not stored:
+        raise HTTPException(status_code=503, detail="Session store unavailable — try again shortly")
+
+    response.set_cookie(key=COOKIE_NAME, value=session_id, **_make_cookie_kwargs())
+    logger.info("accept_invite_success email=%s role=%s", user_obj["email"], user_obj["role"])
+    return {"user": user_obj}
+
+
+# ---------------------------------------------------------------------------
+# Profile + Password management
+# ---------------------------------------------------------------------------
+
+class UpdateProfileBody(BaseModel):
+    name: str
+
+
+class ChangePasswordBody(BaseModel):
+    old_password: str
+    new_password: str
+
+
+@router.patch("/profile")
+async def update_profile(
+    body: UpdateProfileBody,
+    response: Response,
+    gs_session: str | None = Cookie(default=None),
+) -> dict:
+    """Update the authenticated user's display name and refresh the session."""
+    if not gs_session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    session = await _get_session(gs_session)
+    if not session:
+        raise HTTPException(status_code=401, detail="Session expired")
+
+    user = session["user"]
+    try:
+        from src.auth.db import _client as _db_client
+        _db_client().table("users").update({"name": body.name}).eq("id", user["id"]).execute()
+    except Exception:
+        logger.exception("auth: update_profile failed for %s", user.get("id"))
+        raise HTTPException(status_code=500, detail="Failed to update profile")
+
+    # Refresh session with updated name
+    user["name"] = body.name
+    session["user"] = user
+    await _set_session(gs_session, session)
+    response.set_cookie(key=COOKIE_NAME, value=gs_session, **_make_cookie_kwargs())
+    return {"ok": True, "user": user}
+
+
+@router.post("/change-password")
+async def change_password(
+    body: ChangePasswordBody,
+    gs_session: str | None = Cookie(default=None),
+) -> dict:
+    """Verify the old bcrypt password and set a new one."""
+    if not gs_session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    session = await _get_session(gs_session)
+    if not session:
+        raise HTTPException(status_code=401, detail="Session expired")
+
+    user = session["user"]
+    try:
+        import bcrypt
+        from src.auth.db import _client as _db_client
+
+        result = (
+            _db_client()
+            .table("users")
+            .select("password_hash")
+            .eq("id", user["id"])
+            .limit(1)
+            .execute()
+        )
+        if not result.data:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        current_hash = result.data[0].get("password_hash")
+        if not current_hash:
+            raise HTTPException(status_code=400, detail="No password set — use SSO login")
+
+        if not bcrypt.checkpw(body.old_password.encode(), current_hash.encode()):
+            raise HTTPException(status_code=401, detail="Old password is incorrect")
+
+        new_hash = bcrypt.hashpw(body.new_password.encode(), bcrypt.gensalt()).decode()
+        _db_client().table("users").update({"password_hash": new_hash}).eq("id", user["id"]).execute()
+
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("auth: change_password failed for %s", user.get("id"))
+        raise HTTPException(status_code=500, detail="Failed to change password")
+
+    return {"ok": True}

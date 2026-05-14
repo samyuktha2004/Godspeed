@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
@@ -49,6 +50,7 @@ async def ingest_confluence(request: ConfluenceIngestRequest) -> IngestJobRespon
     payload = IngestSourcePayload(
         source_type="confluence",
         team_id=request.team_id,
+        channel_id=request.channel_id,
         params={"space_key": request.space_key, "page_ids": request.page_ids},
     )
     return _dispatch(payload)
@@ -59,6 +61,7 @@ async def ingest_github(request: GithubIngestRequest) -> IngestJobResponse:
     payload = IngestSourcePayload(
         source_type="github",
         team_id=request.team_id,
+        channel_id=request.channel_id,
         params={
             "repo_url": request.repo_url,
             "path_filter": request.path_filter,
@@ -69,7 +72,7 @@ async def ingest_github(request: GithubIngestRequest) -> IngestJobResponse:
 
 
 @router.post("/upload", response_model=IngestJobResponse)
-async def ingest_pdf(team_id: str, file: UploadFile) -> IngestJobResponse:
+async def ingest_pdf(team_id: str, file: UploadFile, channel_id: Optional[str] = None) -> IngestJobResponse:
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
 
@@ -84,6 +87,7 @@ async def ingest_pdf(team_id: str, file: UploadFile) -> IngestJobResponse:
     payload = IngestSourcePayload(
         source_type="pdf",
         team_id=team_id,
+        channel_id=channel_id,
         params={
             "filename": file.filename,
             "content": base64.b64encode(content).decode(),

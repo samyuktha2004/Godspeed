@@ -40,7 +40,8 @@ SET c.qdrant_id   = $qdrant_id,
     c.source      = $source,
     c.source_type = $source_type,
     c.team_id     = $team_id,
-    c.chunk_index = $chunk_index
+    c.chunk_index = $chunk_index,
+    c.channel_id  = $channel_id
 """
 
 _MERGE_HAS_CHUNK = """
@@ -209,6 +210,7 @@ async def upsert_chunk(chunk, extraction: ExtractionResult, driver: AsyncDriver)
             source_type=chunk.source_type,
             team_id=chunk.team_id,
             chunk_index=chunk.chunk_index,
+            channel_id=getattr(chunk, "channel_id", None),
         )
         await session.run(
             _MERGE_HAS_CHUNK,

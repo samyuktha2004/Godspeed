@@ -104,6 +104,10 @@ async def _run_ingest_async(job_id: str, payload: IngestSourcePayload) -> dict[s
         logger.info("ingest_job: fetched %d documents from %s", len(raw_docs), payload.source_type)
 
         for doc in raw_docs:
+            # Stamp channel_id from the payload if the source didn't set it
+            if doc.channel_id is None and payload.channel_id is not None:
+                doc.channel_id = payload.channel_id
+
             # Delete stale vectors and chunk records before re-ingesting the same document
             delete_chunks_for_doc(doc.doc_id)
             sb_delete_chunks(doc.doc_id, client=sb)
@@ -112,6 +116,11 @@ async def _run_ingest_async(job_id: str, payload: IngestSourcePayload) -> dict[s
             if not chunks:
                 logger.warning("ingest_job: no chunks produced for doc_id=%s", doc.doc_id)
                 continue
+
+            # Propagate channel_id from doc down to every chunk
+            for c in chunks:
+                if c.channel_id is None:
+                    c.channel_id = doc.channel_id
 
             # Mask PII in chunk text before embedding or storing
             for chunk in chunks:

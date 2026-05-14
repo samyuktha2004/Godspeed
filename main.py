@@ -18,6 +18,8 @@ from src.utils.middleware import RequestLoggingMiddleware
 from src.auth.router import router as auth_router
 from src.analytics.router import router as analytics_router
 from src.admin.router import router as admin_router
+from src.admin.users_api import router as admin_users_router
+from src.admin.users_api import audit_router as admin_audit_router
 from src.workspace.router import router as workspace_router
 from src.ws.router import router as ws_router
 # src.utils.logger configures the root JSON handler on import
@@ -58,6 +60,8 @@ app.add_middleware(RequestLoggingMiddleware)
 app.include_router(auth_router)
 app.include_router(analytics_router)
 app.include_router(admin_router)
+app.include_router(admin_users_router)
+app.include_router(admin_audit_router)
 app.include_router(workspace_router)
 app.include_router(ws_router)
 app.include_router(agent_router)
