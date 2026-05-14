@@ -45,8 +45,7 @@ create index if not exists users_role_idx            on users (role);
 
 
 -- ── Teams table ──────────────────────────────────────────────
--- Create teams with team_id PK if it doesn't already exist.
--- (schema.sql defines this; this block is a safety net if schema.sql was skipped.)
+-- Create teams with team_id PK if it doesn't exist at all.
 create table if not exists teams (
     team_id      text        primary key,
     cag_snapshot text,
@@ -54,12 +53,25 @@ create table if not exists teams (
     created_at   timestamptz not null default now()
 );
 
--- Extend existing teams table with RBAC columns.
+-- If teams existed before with a different PK name, add team_id as a column.
+do $$ begin
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = 'public'
+          and table_name   = 'teams'
+          and column_name  = 'team_id'
+    ) then
+        alter table teams add column team_id text;
+        create unique index if not exists teams_team_id_idx on teams (team_id);
+    end if;
+end $$;
+
+-- Extend teams table with RBAC columns.
 alter table teams add column if not exists workspace_id uuid references workspaces(id) on delete cascade;
 alter table teams add column if not exists name         text;
 alter table teams add column if not exists slug         text;
 
--- Ensure the default team row exists, then backfill the new columns.
+-- Ensure the default team row exists.
 insert into teams (team_id, workspace_id, name, slug)
 values ('default', '00000000-0000-0000-0000-000000000001', 'Engineering', 'engineering')
 on conflict (team_id) do update
