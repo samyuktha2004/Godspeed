@@ -46,5 +46,11 @@ class Settings(BaseSettings):
     firecrawl_api_key: str = ""
     tavily_api_key: str = ""
 
+    # NL-to-SQL tool — direct PostgreSQL connection string.
+    # e.g. postgresql://postgres:password@db.yourproject.supabase.co:5432/postgres
+    # Leave empty to disable the sql_query agent gracefully.
+    database_url: str = ""
+    sql_max_rows: int = 20
+
 
 settings = Settings()

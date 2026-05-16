@@ -11,12 +11,14 @@ POST /agent/query
   planner_node  (Gemini 2.5 Pro)
        │  ExecutionPlan
        ▼
- ┌─────┴──────────┐
- │                │       (parallel)
-doc_search    ticket_lookup
- │    └──────────┘
+ ┌─────┴──────────┬──────────────┐
+ │                │              │    (parallel)
+doc_search    ticket_lookup  sql_query
+ │    └──────────┘──────────────┘
  │  live_docs   (conditional)
  └──────────────┘
+       │
+    join_node   (fan-in)
        │
   synthesiser_node  (Gemini 2.5 Pro, streaming)
        │
@@ -33,6 +35,7 @@ doc_search    ticket_lookup
 ### Parallelism rules
 
 - `doc_search` and `ticket_lookup` always run in parallel when both are needed.
+- `sql_query` runs in parallel with other agents when the query is about structured/aggregated data.
 - `live_docs` runs after `doc_search` only if confidence is low OR the query names an external library.
 - Each agent node calls exactly one tool. No agent calls two tools.
 
@@ -83,6 +86,8 @@ app.include_router(router)
 | `JIRA_API_TOKEN` | optional | Enables ticket_lookup |
 | `FIRECRAWL_API_KEY` | optional | Enables live_docs |
 | `TAVILY_API_KEY` | optional | Enables live_docs |
+| `DATABASE_URL` | optional | Direct PostgreSQL URL — enables sql_query. e.g. `postgresql://postgres:pw@localhost:5432/postgres` |
+| `SQL_MAX_ROWS` | optional | Max rows returned per SQL query (default: `20`) |
 
 ## BM25 index
 
@@ -133,8 +138,8 @@ Events emitted in order:
 | Event | Payload |
 |---|---|
 | `plan_ready` | `{tasks, reasoning}` |
-| `agent_started` | `{agent}` |
-| `agent_done` | `{agent, chunks, confidence}` |
+| `agent_started` | `{agent}` — agent names: `doc_search`, `ticket_lookup`, `live_docs`, `sql_query` |
+| `agent_done` | `{agent, retrieval_confidence}` |
 | `synthesis_started` | `{}` |
 | `answer_chunk` | `{chunk}` (one per token) |
 | `guardrail_result` | `{score, escalate}` |

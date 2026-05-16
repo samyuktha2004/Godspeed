@@ -7,6 +7,7 @@ Available agents:
 - ticket_lookup: Searches Jira tickets. Use when query mentions bugs, issues, tickets, sprints, or task tracking.
 - live_docs: Fetches live web content via Firecrawl/Tavily. Use ONLY when the query mentions a specific external library, framework, or third-party tool where internal docs are insufficient.
 - summariser: Summarises a large set of retrieved chunks. Use ONLY when more than 10 chunks are expected.
+- sql_query: Queries the internal Supabase database with SQL. Use when the query asks about counts, stats, aggregations, ingestion status, document lists, or any structured/numeric data (e.g. "how many documents", "failed jobs", "which source types", "ingestion stats").
 
 Rules:
 1. doc_search and ticket_lookup should run in parallel when both are needed — set depends_on: [] for both.
@@ -14,6 +15,7 @@ Rules:
 3. summariser only runs after doc_search. Set depends_on: ["doc_search"].
 4. Do NOT include agents that are not needed for this query.
 5. Rephrase the input for each agent to be focused and specific to what that agent can retrieve.
+6. sql_query runs independently (depends_on: []). Use it when the query is about structured or aggregated data rather than semantic knowledge retrieval. It can run in parallel with doc_search.
 
 Return ONLY valid JSON matching this exact schema. No preamble. No markdown code fences. No explanation outside the JSON.
 
@@ -96,6 +98,44 @@ Source chunks:
 {chunks_text}
 
 Evaluate grounding and return JSON now."""
+
+
+SQL_NL_TO_SQL_PROMPT = """\
+You are a SQL generation agent for an Enterprise Knowledge Copilot backed by PostgreSQL (Supabase).
+
+Translate the user's natural language question into a safe SELECT query.
+
+Available tables and columns:
+
+documents:
+  doc_id (text, unique), title (text), source_url (text),
+  source_type (text: 'confluence'|'github'|'jira'|'file'|'url'),
+  team_id (text), metadata (jsonb), created_at (timestamptz), updated_at (timestamptz)
+
+chunks:
+  chunk_id (text, unique), doc_id (text FK->documents.doc_id), text (text),
+  source (text), source_type (text), team_id (text),
+  chunk_index (integer), created_at (timestamptz)
+
+ingest_jobs:
+  job_id (text), status (text: 'pending'|'running'|'completed'|'failed'),
+  source_type (text), team_id (text), chunks_ingested (integer),
+  error (text nullable), created_at (timestamptz), completed_at (timestamptz nullable)
+
+Rules:
+1. Generate ONLY a SELECT statement — never INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, or CREATE.
+2. ALWAYS include `team_id = '<TEAM_ID_PLACEHOLDER>'` in every table's WHERE clause.
+3. Use ONLY the tables listed above.
+4. Always end with `LIMIT {max_rows}`.
+5. Use COUNT(*), SUM, AVG, MAX, MIN for aggregations when the question asks for totals or stats.
+6. For recency, use `created_at >= NOW() - INTERVAL '7 days'` style syntax.
+7. Cast uuid columns with `::text` when displaying them.
+
+Return ONLY valid JSON — no preamble, no markdown fences:
+{{
+  "sql": "<SELECT query — use '<TEAM_ID_PLACEHOLDER>' literally for every team_id value>",
+  "description": "<one line describing what this query answers>"
+}}"""
 
 
 def build_summariser_prompt(chunks_text: str, query: str) -> str:

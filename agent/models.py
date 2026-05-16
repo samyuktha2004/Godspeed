@@ -16,7 +16,7 @@ class QueryInput(BaseModel):
 
 
 class AgentTask(BaseModel):
-    agent: Literal["doc_search", "ticket_lookup", "live_docs", "summariser"]
+    agent: Literal["doc_search", "ticket_lookup", "live_docs", "summariser", "sql_query"]
     input: str
     depends_on: list[str] = Field(default_factory=list)
 

@@ -142,3 +142,6 @@ Pillow==11.1.0
 # Uncomment whichever you use. Neither is imported unless its API key is set.
 # firecrawl-py==1.9.0
 # tavily-python==0.5.0
+
+# ── NL-to-SQL agent — direct PostgreSQL connection ────────────────────────────
+asyncpg>=0.29.0

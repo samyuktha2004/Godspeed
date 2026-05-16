@@ -105,7 +105,7 @@ This design ensures **scalability by source**, **operational clarity**, and **pr
 ```
 agent/                          # LangGraph multi-agent query engine (IMPLEMENTED)
 ├── api.py                      # POST /agent/query — SSE streaming endpoint
-├── graph.py                    # LangGraph build: planner → [doc_search|ticket_lookup|live_docs] → synthesiser → guardrail
+├── graph.py                    # LangGraph build: planner → [doc_search|ticket_lookup|live_docs|sql_query] → join → synthesiser → guardrail
 ├── models.py                   # KnowledgeGraphState, QueryInput, ExecutionPlan, AgentResult, RetrievedChunk
 ├── config.py                   # LLM + agent config
 ├── prompts.py                  # Prompt templates
@@ -118,6 +118,7 @@ agent/                          # LangGraph multi-agent query engine (IMPLEMENTE
     ├── doc_search.py           # Qdrant hybrid dense+sparse search
     ├── ticket_lookup.py        # Jira-specific retrieval
     ├── live_docs.py            # Firecrawl real-time doc fetching
+    ├── sql_query.py            # NL-to-SQL: translates query → validated SELECT → asyncpg execution
     └── summariser.py           # Context compression before synthesis
 
 graph_store/                    # Neo4j knowledge graph (IMPLEMENTED)
@@ -498,7 +499,7 @@ POST /agent/query
 ├─ Request: { query: string, team_id: string, session_id: string }
 ├─ Response: Content-Type: text/event-stream
 │  ├─ event: plan_ready        → { tasks: [AgentTask], reasoning: string }
-│  ├─ event: agent_started     → { agent: "doc_search"|"ticket_lookup"|"live_docs"|"summariser" }
+│  ├─ event: agent_started     → { agent: "doc_search"|"ticket_lookup"|"live_docs"|"sql_query"|"summariser" }
 │  ├─ event: agent_done        → { agent: string, chunks: [RetrievedChunk], confidence: "high"|"medium"|"low" }
 │  ├─ event: synthesis_started → {}
 │  ├─ event: answer_chunk      → { chunk: string }   (repeats, one per token)
