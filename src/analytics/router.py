@@ -122,9 +122,28 @@ async def get_topics(limit: int = Query(default=10, ge=1, le=50)) -> dict:
 # ---------------------------------------------------------------------------
 
 _EMPTY_DOMAINS = [
-    {"domain": label, "coverage": 0.0, "freshness": 0.0, "accuracy": 0.0, "score": 0.0}
+    {"domain": label, "coverage": 0.0, "freshness": None, "accuracy": None, "score": 0.0}
     for label in ["Service", "Library", "Incident", "Team"]
 ]
+
+
+async def _compute_freshness() -> float | None:
+    """Fraction of documents ingested/updated within the last 30 days.
+    Returns None if Supabase is unavailable or unconfigured."""
+    try:
+        from src.auth.db import _client as _sb_client
+        sb = _sb_client()
+        cutoff = (datetime.utcnow() - timedelta(days=30)).isoformat()
+        total_result  = sb.table("documents").select("id", count="exact").execute()
+        recent_result = sb.table("documents").select("id", count="exact").gte("updated_at", cutoff).execute()
+        total  = total_result.count or 0
+        recent = recent_result.count or 0
+        if total == 0:
+            return None
+        return round(recent / total, 2)
+    except Exception:
+        logger.warning("analytics: freshness query failed — returning None")
+        return None
 
 
 @router.get("/knowledge-health")
@@ -149,20 +168,24 @@ async def get_knowledge_health() -> dict:
 
     counts: dict[str, int] = {r["label"]: r["cnt"] for r in rows if r.get("label")}
     total_nodes = sum(counts.values()) or 1
+    freshness = await _compute_freshness()
 
     def _score(label: str) -> dict:
         cnt      = counts.get(label, 0)
         coverage = min(1.0, cnt / max(total_nodes * 0.25, 1))
+        parts    = [coverage]
+        if freshness is not None:
+            parts.append(freshness)
         return {
             "domain":    label,
             "coverage":  round(coverage, 2),
-            "freshness": 0.85,
-            "accuracy":  0.90,
-            "score":     round((coverage + 0.85 + 0.90) / 3, 2),
+            "freshness": freshness,
+            "accuracy":  None,
+            "score":     round(sum(parts) / len(parts), 2),
         }
 
-    domains = [_score(lbl) for lbl in ["Service", "Library", "Incident", "Team"] if lbl in counts]
-    if not domains:
+    domains = [_score(lbl) for lbl in ["Service", "Library", "Incident", "Team"]]
+    if not any(d["coverage"] > 0 for d in domains):
         domains = _EMPTY_DOMAINS
 
     overall = round(sum(d["score"] for d in domains) / len(domains), 2)
@@ -219,6 +242,48 @@ async def get_dependencies() -> dict:
             "last_checked":    now,
         })
     return {"dependencies": deps}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/analytics/coverage-gaps
+# ---------------------------------------------------------------------------
+
+@router.get("/coverage-gaps")
+async def get_coverage_gaps() -> dict:
+    """Least-documented entities per label — shows where ingestion has the highest impact."""
+    rows: list[dict] = []
+    try:
+        from graph_store.config import settings as neo4j_settings
+        from neo4j import AsyncGraphDatabase
+
+        driver = AsyncGraphDatabase.driver(
+            neo4j_settings.neo4j_uri,
+            auth=(neo4j_settings.neo4j_username, neo4j_settings.neo4j_password),
+        )
+        async with driver.session() as session:
+            result = await session.run("""
+                MATCH (n)
+                WHERE n:Service OR n:Library OR n:Incident OR n:Team
+                OPTIONAL MATCH (n)<-[:MENTIONS|REFERENCES]-(c:Chunk)
+                RETURN labels(n)[0]  AS label,
+                       n.name        AS name,
+                       count(c)      AS mention_count
+                ORDER BY mention_count ASC, label ASC
+                LIMIT 60
+            """)
+            rows = await result.data()
+        await driver.close()
+    except Exception as exc:
+        logger.warning("coverage_gaps_neo4j_error", extra={"error": str(exc)})
+
+    gaps: dict[str, list[dict]] = {"Service": [], "Library": [], "Incident": [], "Team": []}
+    for r in rows:
+        label = r.get("label")
+        name  = r.get("name")
+        if label in gaps and name:
+            gaps[label].append({"name": name, "mention_count": r.get("mention_count", 0)})
+
+    return {"gaps": gaps}
 
 
 # ---------------------------------------------------------------------------

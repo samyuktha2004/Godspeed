@@ -24,7 +24,14 @@ HISTORY_KEY = "gs:queries"
 TOPICS_KEY  = "gs:topics"
 
 
-async def _store_query_event(query_input: QueryInput, duration_ms: int, success: bool) -> None:
+async def _store_query_event(
+    query_input: QueryInput,
+    duration_ms: int,
+    success: bool,
+    agent_results: dict | None = None,
+    guardrail_score: float | None = None,
+    escalated: bool = False,
+) -> None:
     """Persist query event to Redis for analytics and workspace history."""
     try:
         import redis.asyncio as aioredis
@@ -39,6 +46,16 @@ async def _store_query_event(query_input: QueryInput, duration_ms: int, success:
             "success":      success,
             "duration_ms":  duration_ms,
             "answer_brief": "",
+            # Per-agent retrieval metrics — populated from final graph state
+            "agents": {
+                agent: {
+                    "confidence":  result.retrieval_confidence,
+                    "chunk_count": len(result.chunks),
+                }
+                for agent, result in (agent_results or {}).items()
+            },
+            "guardrail_score": guardrail_score,
+            "escalated":       escalated,
         }
 
         r = aioredis.from_url(settings.redis_url, decode_responses=True)
@@ -51,6 +68,22 @@ async def _store_query_event(query_input: QueryInput, duration_ms: int, success:
             for word in query_input.query.lower().split():
                 if len(word) > 4 and word.isalpha():
                     await r.zincrby(TOPICS_KEY, 1, word)
+
+            # Write escalation record when the guardrail flagged the answer
+            if escalated:
+                escalation = {
+                    "id":              event["id"],
+                    "query":           query_input.query,
+                    "frequency":       1,
+                    "last_seen":       event["created_at"],
+                    "teams":           [query_input.team_id],
+                    "status":          "open",
+                    "gap_type":        "missing_knowledge",
+                    "guardrail_score": guardrail_score,
+                }
+                await r.lpush("gs:escalations", json.dumps(escalation))
+                await r.ltrim("gs:escalations", 0, 499)
+
         finally:
             await r.aclose()
     except Exception as exc:
@@ -70,12 +103,17 @@ async def _event_generator(
         )
         with Timer() as t:
             try:
-                await graph.ainvoke(initial_state)
+                final_state = await graph.ainvoke(initial_state)
                 logger.info(
                     "query_complete",
                     extra={"session_id": query_input.session_id, "duration_ms": t.ms},
                 )
-                await _store_query_event(query_input, t.ms, success=True)
+                await _store_query_event(
+                    query_input, t.ms, success=True,
+                    agent_results=final_state.get("agent_results", {}),
+                    guardrail_score=final_state.get("guardrail_score"),
+                    escalated=final_state.get("escalate", False),
+                )
             except Exception as exc:
                 logger.exception(
                     "query_error",
