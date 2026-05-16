@@ -81,7 +81,6 @@ app.include_router(tools_router)
 @app.get("/health", tags=["infra"])
 async def health() -> dict:
     import asyncio
-    from graph_store.config import settings as neo4j_settings
 
     results: dict = {"status": "ok", "neo4j": "unknown", "redis": "unknown", "qdrant": "unknown"}
 

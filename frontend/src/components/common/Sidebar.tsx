@@ -62,7 +62,7 @@ export function Sidebar() {
     navigate({ to: '/login' })
   }
 
-  const navItems = user?.role === 'admin'
+  const navItems = (user?.role === 'admin' || user?.role === 'org_admin')
     ? [...BASE_NAV, ADMIN_NAV]
     : BASE_NAV
 

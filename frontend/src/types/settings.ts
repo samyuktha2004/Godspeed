@@ -48,7 +48,7 @@ export interface AuditLogEntry {
 export interface UserInvite {
   email: string
   name: string
-  role: 'engineer' | 'manager' | 'admin'
+  role: 'engineer' | 'manager' | 'admin' | 'org_admin'
   team_id?: string
   channel_ids?: string[]
 }
