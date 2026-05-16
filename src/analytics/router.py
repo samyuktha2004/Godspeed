@@ -253,13 +253,8 @@ async def get_coverage_gaps() -> dict:
     """Least-documented entities per label — shows where ingestion has the highest impact."""
     rows: list[dict] = []
     try:
-        from graph_store.config import settings as neo4j_settings
-        from neo4j import AsyncGraphDatabase
-
-        driver = AsyncGraphDatabase.driver(
-            neo4j_settings.neo4j_uri,
-            auth=(neo4j_settings.neo4j_username, neo4j_settings.neo4j_password),
-        )
+        from graph_store.writer import get_driver
+        driver = get_driver()
         async with driver.session() as session:
             result = await session.run("""
                 MATCH (n)
@@ -272,7 +267,6 @@ async def get_coverage_gaps() -> dict:
                 LIMIT 60
             """)
             rows = await result.data()
-        await driver.close()
     except Exception as exc:
         logger.warning("coverage_gaps_neo4j_error", extra={"error": str(exc)})
 

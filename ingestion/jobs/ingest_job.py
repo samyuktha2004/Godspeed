@@ -148,4 +148,16 @@ async def _run_ingest_async(job_id: str, payload: IngestSourcePayload) -> dict[s
         job.error = str(exc)
 
     upsert_job(job, client=sb)
+
+    # Reflect run outcome back to the admin dashboard source list in Redis
+    try:
+        from src.admin.router import update_source_sync_status
+        await update_source_sync_status(
+            payload.source_type,
+            "ok" if job.status == IngestJobStatus.completed else "error",
+            error_msg=job.error,
+        )
+    except Exception:
+        logger.warning("ingest_job: failed to update source sync_status")
+
     return {"job_id": job_id, "status": job.status.value, "chunks_ingested": total_chunks}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections import deque
 from typing import Any
 
@@ -52,7 +53,8 @@ class _WSLogHandler(logging.Handler):
 
 # Install the handler on the root logger once
 _ws_handler = _WSLogHandler()
-_ws_handler.setLevel(logging.DEBUG)
+_ws_level = getattr(logging, os.environ.get("LOG_WS_LEVEL", "WARNING").upper(), logging.WARNING)
+_ws_handler.setLevel(_ws_level)
 # Use the JSON formatter from our logger if available
 try:
     from src.utils.logger import _JsonFormatter  # type: ignore[attr-defined]

@@ -26,6 +26,14 @@ const requireAuth = () => {
   }
 }
 
+const requireAdmin = () => {
+  requireAuth()
+  const role = useAuthStore.getState().user?.role
+  if (role !== 'admin' && role !== 'org_admin') {
+    throw redirect({ to: '/' })
+  }
+}
+
 const rootRoute = createRootRoute({ component: App })
 
 export const loginRoute = createRoute({
@@ -71,7 +79,7 @@ export const analyticsRoute = createRoute({
 export const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin',
-  beforeLoad:     requireAuth,
+  beforeLoad:     requireAdmin,
   component:      Admin,
 })
 

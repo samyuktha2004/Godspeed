@@ -6,9 +6,10 @@ import json
 import os
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from src.auth.deps import require_role
 from src.config import settings
 from src.utils.logger import get_logger
 
@@ -103,12 +104,29 @@ async def _save_sources(sources: list[dict]) -> None:
         await r.aclose()
 
 
+async def update_source_sync_status(
+    source_type: str,
+    status: str,
+    error_msg: str | None = None,
+) -> None:
+    """Update sync_status and last_sync for all sources matching source_type."""
+    from datetime import datetime
+    sources = await _load_sources()
+    now = datetime.utcnow().isoformat()
+    for src in sources:
+        if src.get("type") == source_type:
+            src["sync_status"] = status
+            src["last_sync"]   = now
+            src["error_msg"]   = error_msg
+    await _save_sources(sources)
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
 @router.get("/data-sources")
-async def list_data_sources() -> dict:
+async def list_data_sources(user=Depends(require_role("admin", "org_admin"))) -> dict:
     return {"sources": await _load_sources()}
 
 
@@ -117,12 +135,26 @@ class PatchSourceBody(BaseModel):
 
 
 @router.patch("/data-sources/{source_id}")
-async def patch_data_source(source_id: str, body: PatchSourceBody) -> dict:
+async def patch_data_source(
+    source_id: str,
+    body: PatchSourceBody,
+    user=Depends(require_role("admin", "org_admin")),
+) -> dict:
     sources = await _load_sources()
     for src in sources:
         if src["id"] == source_id:
             src["enabled"] = body.enabled
             await _save_sources(sources)
             logger.info("data_source_toggled", extra={"id": source_id, "enabled": body.enabled})
+            try:
+                from src.ws.router import broadcast_notification
+                await broadcast_notification({
+                    "type":    "source_toggled",
+                    "id":      source_id,
+                    "name":    src.get("name"),
+                    "enabled": body.enabled,
+                })
+            except Exception:
+                pass
             return {"ok": True, "source": src}
     raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")

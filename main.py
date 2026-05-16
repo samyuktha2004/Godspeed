@@ -85,15 +85,11 @@ async def health() -> dict:
 
     results: dict = {"status": "ok", "neo4j": "unknown", "redis": "unknown", "qdrant": "unknown"}
 
-    # Neo4j
+    # Neo4j — reuse module-level singleton; do not close it here
     try:
-        from neo4j import AsyncGraphDatabase
-        driver = AsyncGraphDatabase.driver(
-            neo4j_settings.neo4j_uri,
-            auth=(neo4j_settings.neo4j_username, neo4j_settings.neo4j_password),
-        )
+        from graph_store.writer import get_driver
+        driver = get_driver()
         await asyncio.wait_for(driver.verify_connectivity(), timeout=3)
-        await driver.close()
         results["neo4j"] = "ok"
     except Exception as exc:
         results["neo4j"] = f"error: {exc}"
