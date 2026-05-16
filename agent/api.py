@@ -84,6 +84,15 @@ async def _store_query_event(
                 await r.lpush("gs:escalations", json.dumps(escalation))
                 await r.ltrim("gs:escalations", 0, 499)
 
+            # Persist to Supabase for time-series anomaly detection.
+            # Fire-and-forget: never allowed to fail the SSE stream.
+            try:
+                import asyncio as _asyncio
+                from src.anomaly.db import async_upsert_query_event
+                _asyncio.ensure_future(async_upsert_query_event(event))
+            except Exception:
+                pass
+
         finally:
             await r.aclose()
     except Exception as exc:

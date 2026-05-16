@@ -1,8 +1,12 @@
 """Celery app configuration and task setup."""
 
+import logging
+
 from celery import Celery
 from kombu import Exchange, Queue
 from src.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Create Celery app
 app = Celery(settings.app_name)
@@ -93,6 +97,21 @@ def setup_periodic_tasks(sender, **kwargs):
         name="poll-error-traces",
     )
 
+    # Staleness scoring daily at 03:00 UTC
+    from celery.schedules import crontab
+    sender.add_periodic_task(
+        crontab(hour=3, minute=0),
+        compute_staleness_scores.s(),
+        name="compute-staleness-scores",
+    )
+
+    # Dependency risk daily at 03:30 UTC
+    sender.add_periodic_task(
+        crontab(hour=3, minute=30),
+        compute_dependency_risk.s(),
+        name="compute-dependency-risk",
+    )
+
 
 # Task imports (to be implemented in tasks module)
 from celery import shared_task
@@ -124,8 +143,13 @@ def poll_server_logs(self):
 
 @shared_task(queue="polling", bind=True, max_retries=3)
 def poll_metrics_anomalies(self):
-    """Poll metrics for anomalies."""
-    pass
+    """Z-score spike detection and escalation trend detection — runs every 15 min."""
+    try:
+        from src.anomaly.tasks import run_zscore_anomaly_detection
+        run_zscore_anomaly_detection()
+    except Exception as exc:
+        logger.error("poll_metrics_anomalies failed: %s", exc)
+        raise self.retry(exc=exc, countdown=120)
 
 
 @shared_task(queue="polling", bind=True, max_retries=3)
@@ -144,6 +168,28 @@ def process_webhook_event(self, source_type: str, event_data: dict, rbac_tags: d
 def enrich_and_index_document(self, document: dict):
     """Extract entities, relationships, and index document."""
     pass
+
+
+@shared_task(queue="low", bind=True, max_retries=2)
+def compute_staleness_scores(self):
+    """Daily staleness risk scoring for all documents (03:00 UTC)."""
+    try:
+        from src.anomaly.tasks import run_staleness_scoring
+        run_staleness_scoring()
+    except Exception as exc:
+        logger.error("compute_staleness_scores failed: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
+
+
+@shared_task(queue="low", bind=True, max_retries=2)
+def compute_dependency_risk(self):
+    """Daily dependency risk modelling from Neo4j graph (03:30 UTC)."""
+    try:
+        from src.anomaly.tasks import run_dependency_risk_modeling
+        run_dependency_risk_modeling()
+    except Exception as exc:
+        logger.error("compute_dependency_risk failed: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from src.jira_agent.router import router as jira_router
 from src.utils.middleware import RequestLoggingMiddleware
 from src.auth.router import router as auth_router
 from src.analytics.router import router as analytics_router
+from src.anomaly.router import router as anomaly_router
 from src.admin.router import router as admin_router
 from src.admin.users_api import router as admin_users_router
 from src.admin.users_api import audit_router as admin_audit_router
@@ -59,6 +60,7 @@ app.add_middleware(RequestLoggingMiddleware)
 # ---------------------------------------------------------------------------
 app.include_router(auth_router)
 app.include_router(analytics_router)
+app.include_router(anomaly_router)
 app.include_router(admin_router)
 app.include_router(admin_users_router)
 app.include_router(admin_audit_router)

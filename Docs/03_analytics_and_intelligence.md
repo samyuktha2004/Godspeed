@@ -512,9 +512,10 @@ ANALYTICS_PERMISSIONS = {
 
 ---
 
-## 9. Area 4 — Anomaly Detection & Forecasting (Planned)
+## 9. Area 4 — Anomaly Detection & Forecasting
 
-> **Status: Planned Extension.** All input streams already exist in Areas 1–3. No new data pipelines needed. Requires: time-series aggregation layer (InfluxDB or PostgreSQL time-series extension).
+> **Status: Implemented** on branch `anomaly-and-forecasting`. See [`anomaly-and-forecasting/`](./anomaly-and-forecasting/README.md) for full implementation docs.  
+> The specs below describe the original design intent. The actual implementation uses plain PostgreSQL (no InfluxDB) and stdlib-only algorithms (no external ML dependencies).
 
 ### Component 1 — Query Spike Detector
 
