@@ -179,12 +179,12 @@ def get_signals(
 
 def resolve_signal(signal_id: str, resolver_user_id: str) -> bool:
     try:
-        _sb().table("anomaly_signals").update({
+        result = _sb().table("anomaly_signals").update({
             "resolved":    True,
             "resolved_by": resolver_user_id,
             "resolved_at": datetime.utcnow().isoformat(),
         }).eq("id", signal_id).eq("resolved", False).execute()
-        return True
+        return bool(result.data)  # empty list = signal not found or already resolved
     except Exception:
         logger.warning("anomaly_db: resolve_signal failed id=%s", signal_id, exc_info=True)
         return False
