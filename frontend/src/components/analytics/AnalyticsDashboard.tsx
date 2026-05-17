@@ -6,8 +6,9 @@ import { KnowledgeHealthDashboard } from './KnowledgeHealthDashboard'
 import { DependencyTracker } from './DependencyTracker'
 import { EscalationTable } from './EscalationTable'
 import { AnalyticsExport } from './AnalyticsExport'
+import { AnomaliesDashboard } from './AnomaliesDashboard'
 
-type Tab = 'overview' | 'health' | 'dependencies' | 'escalations' | 'export'
+type Tab = 'overview' | 'health' | 'dependencies' | 'escalations' | 'export' | 'anomalies'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'overview',     label: 'Overview' },
@@ -15,6 +16,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'dependencies', label: 'Dependencies' },
   { id: 'escalations',  label: 'Escalations' },
   { id: 'export',       label: 'Export' },
+  { id: 'anomalies',    label: 'Anomalies' },
 ]
 
 export function AnalyticsDashboard() {
@@ -55,6 +57,7 @@ export function AnalyticsDashboard() {
       {tab === 'dependencies' && <DependencyTracker />}
       {tab === 'escalations'  && <EscalationTable />}
       {tab === 'export'       && <AnalyticsExport />}
+      {tab === 'anomalies'    && <AnomaliesDashboard />}
     </div>
   )
 }

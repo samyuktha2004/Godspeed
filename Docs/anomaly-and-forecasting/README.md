@@ -46,7 +46,32 @@ agent/api.py                      ← +7 lines: fire-and-forget event persist
 src/celery_app.py                 ← poll_metrics_anomalies implemented;
                                      2 new daily tasks added
 main.py                           ← anomaly_router registered
+
+frontend/src/types/anomaly.ts                          ← TypeScript interfaces
+frontend/src/components/analytics/
+  AnomaliesDashboard.tsx          ← 6th tab panel: alerts feed + summary badges
+  QuerySpikeChart.tsx             ← ComposedChart with ReferenceArea anomaly overlays
+  EscalationTrendChart.tsx        ← 14-day daily trend + current/prior avg reference lines
+  StalenessRiskList.tsx           ← Horizontal BarChart, color-coded by risk score
+  DependencyTracker.tsx           ← +Risk Score column (score/100 badge + Poisson %)
+  AnalyticsDashboard.tsx          ← +Anomalies tab wired to AnomaliesDashboard
 ```
+
+---
+
+## Frontend Components
+
+All components live under `frontend/src/components/analytics/`. They follow the same patterns as existing analytics components: `apiFetch` → `.json()`, TanStack React Query v5, Recharts, Tailwind with dark-mode variants.
+
+| Component | Fetches | Renders |
+|---|---|---|
+| `AnomaliesDashboard` | `/api/anomaly/signals/summary`, `/api/anomaly/signals` | Severity badge strip, active alert feed with Resolve button (admin only), child charts. Auto-refreshes every 2 min. |
+| `QuerySpikeChart` | `/api/anomaly/query-patterns?days=14` | Recharts `ComposedChart` — query volume (orange line) + escalations (red dashed) + shaded `ReferenceArea` bands for anomalous hours (red=critical, orange=high, amber=medium). |
+| `EscalationTrendChart` | `/api/analytics/escalations?limit=200` | Recharts `LineChart` — daily escalation count over 14 days, with reference lines for current-7d average (red dashed) and prior-7d average (gray dashed). Trend arrow badge shows direction and % change. |
+| `StalenessRiskList` | `/api/anomaly/staleness?limit=20` | Recharts horizontal `BarChart` — top 20 stale docs sorted descending; bars color-coded green→amber→orange→red by risk score. Tooltip shows age, age factor, query pressure. |
+| `DependencyTracker` *(modified)* | + `/api/anomaly/dependency-risk` | Risk Score column added: color-coded `{score}/100` badge + `{poisson_30d}%` in 30d probability. Gracefully shows `—` for libraries not yet scored. |
+
+The **Resolve** button on alert cards is visible only to `admin` and `org_admin` roles. It calls `PATCH /api/anomaly/signals/{id}/resolve`, then invalidates the signals and summary queries so the feed updates immediately.
 
 ---
 

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/http'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 import { cn } from '@/lib/utils'
+import type { DependencyRiskResponse, LibraryRisk } from '@/types/anomaly'
 
 interface Dependency {
   name:            string
@@ -21,6 +22,18 @@ interface DepResponse {
 async function fetchDeps(): Promise<DepResponse> {
   const res = await apiFetch('/api/analytics/dependencies')
   return res.json()
+}
+
+async function fetchDepRisk(): Promise<DependencyRiskResponse> {
+  const res = await apiFetch('/api/anomaly/dependency-risk')
+  return res.json()
+}
+
+function riskBadgeColor(score: number): string {
+  if (score >= 0.7) return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+  if (score >= 0.5) return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+  if (score >= 0.3) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+  return 'bg-stone-100 text-stone-500 dark:bg-stone-800 dark:text-stone-400'
 }
 
 type SortKey = 'name' | 'type' | 'breaking_change'
@@ -62,6 +75,16 @@ export function DependencyTracker() {
     queryFn:   fetchDeps,
     staleTime: 300_000,
   })
+
+  const { data: riskData } = useQuery({
+    queryKey:  ['anomaly-dep-risk'],
+    queryFn:   fetchDepRisk,
+    staleTime: 300_000,
+  })
+
+  const riskMap = new Map<string, LibraryRisk>(
+    (riskData?.libraries ?? []).map((lib) => [lib.entity_id, lib]),
+  )
 
   const [sort, setSort]     = useState<SortKey>('breaking_change')
   const [filter, setFilter] = useState<'all' | 'outdated' | 'breaking'>('all')
@@ -138,6 +161,7 @@ export function DependencyTracker() {
                 <th className="px-3 py-2 text-left font-medium">Version</th>
                 <th className="px-3 py-2 text-left font-medium">Teams</th>
                 <th className="px-3 py-2 text-left font-medium">Checked</th>
+                <th className="px-3 py-2 text-left font-medium">Risk Score</th>
               </tr>
             </thead>
             <tbody>
@@ -164,6 +188,22 @@ export function DependencyTracker() {
                   </td>
                   <td className="px-3 py-2.5 text-stone-400 text-xs">
                     {new Date(d.last_checked).toLocaleDateString()}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    {(() => {
+                      const risk = riskMap.get(d.name)
+                      if (!risk) return <span className="text-xs text-stone-300 dark:text-stone-600">—</span>
+                      return (
+                        <div className="flex flex-col gap-0.5">
+                          <span className={cn('w-fit rounded-full px-2 py-0.5 text-xs font-medium', riskBadgeColor(risk.score))}>
+                            {Math.round(risk.score * 100)}/100
+                          </span>
+                          <span className="text-xs text-stone-400">
+                            {Math.round(risk.details.poisson_30d * 100)}% in 30d
+                          </span>
+                        </div>
+                      )
+                    })()}
                   </td>
                 </tr>
               ))}
