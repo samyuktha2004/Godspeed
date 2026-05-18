@@ -81,39 +81,51 @@ async def _redis() -> aioredis.Redis:
     )
 
 
+# In-memory fallback when Redis is unreachable (single-process deploy)
+_mem_sessions: dict[str, str] = {}
+
+
 async def _get_session(session_id: str) -> dict | None:
-    r = await _redis()
     try:
-        raw = await r.get(f"gs:session:{session_id}")
-        return json.loads(raw) if raw else None
-    except Exception as exc:
-        logger.warning("session_read_failed", extra={"error": str(exc)})
-        return None
-    finally:
-        await r.aclose()
+        r = await _redis()
+        try:
+            raw = await r.get(f"gs:session:{session_id}")
+            if raw:
+                return json.loads(raw)
+        finally:
+            await r.aclose()
+    except Exception:
+        pass
+    # Fallback to in-memory
+    raw = _mem_sessions.get(session_id)
+    return json.loads(raw) if raw else None
 
 
 async def _set_session(session_id: str, payload: dict) -> bool:
-    """Returns False if Redis is unavailable."""
-    r = await _redis()
+    serialised = json.dumps(payload)
     try:
-        await r.setex(f"gs:session:{session_id}", SESSION_TTL, json.dumps(payload))
-        return True
+        r = await _redis()
+        try:
+            await r.setex(f"gs:session:{session_id}", SESSION_TTL, serialised)
+            return True
+        finally:
+            await r.aclose()
     except Exception as exc:
-        logger.error("session_write_failed", extra={"error": str(exc)})
-        return False
-    finally:
-        await r.aclose()
+        logger.warning("redis_unavailable — using in-memory session store", extra={"error": str(exc)})
+        _mem_sessions[session_id] = serialised
+        return True
 
 
 async def _del_session(session_id: str) -> None:
-    r = await _redis()
+    _mem_sessions.pop(session_id, None)
     try:
-        await r.delete(f"gs:session:{session_id}")
-    except Exception as exc:
-        logger.warning("session_delete_failed", extra={"error": str(exc)})
-    finally:
-        await r.aclose()
+        r = await _redis()
+        try:
+            await r.delete(f"gs:session:{session_id}")
+        finally:
+            await r.aclose()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
