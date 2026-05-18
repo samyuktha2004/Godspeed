@@ -73,7 +73,12 @@ def _make_cookie_kwargs() -> dict:
 
 
 async def _redis() -> aioredis.Redis:
-    return aioredis.from_url(settings.redis_url, decode_responses=True)
+    return aioredis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        socket_timeout=5,
+        socket_connect_timeout=5,
+    )
 
 
 async def _get_session(session_id: str) -> dict | None:
@@ -127,10 +132,14 @@ async def login(body: LoginRequest, response: Response) -> dict:
 
     # ── Try DB-backed auth first ─────────────────────────────
     try:
+        import asyncio
         import bcrypt
         from src.auth.db import get_allowed_channel_ids, get_user_by_email, get_user_team_id
 
-        db_user = get_user_by_email(email)
+        db_user = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, get_user_by_email, email),
+            timeout=5,
+        )
         if db_user and db_user.get("password_hash"):
             pw_match = bcrypt.checkpw(
                 body.password.encode(),
