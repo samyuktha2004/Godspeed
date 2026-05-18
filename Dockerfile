@@ -1,8 +1,10 @@
 FROM python:3.11-slim
 
-# System deps
+# System deps + Node.js 20
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl git \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -17,7 +19,14 @@ RUN python3 -c "from FlagEmbedding import BGEM3FlagModel; BGEM3FlagModel('BAAI/b
 # Download spacy model
 RUN python3 -m spacy download en_core_web_sm
 
-# Copy app code
+# Build the React frontend
+COPY frontend/package.json frontend/package-lock.json* frontend/
+RUN cd frontend && npm install
+
+COPY frontend/ frontend/
+RUN cd frontend && npm run build
+
+# Copy remaining app code
 COPY . .
 
 # HuggingFace Spaces requires port 7860

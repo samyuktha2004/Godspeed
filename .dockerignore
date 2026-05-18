@@ -7,7 +7,6 @@ __pycache__
 .git
 .gitignore
 frontend/node_modules
-frontend/src
 frontend/.env
 data/bm25_index.pkl
 *.log
