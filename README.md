@@ -1,8 +1,8 @@
 ---
 title: GodSpeed
 emoji: 🚀
-colorFrom: orange
-colorTo: red
+colorFrom: red
+colorTo: yellow
 sdk: docker
 pinned: false
 ---
