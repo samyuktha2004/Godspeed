@@ -99,6 +99,7 @@ supabase==2.15.0
 # ── Background task queue ─────────────────────────────────────────────────────
 # celery[redis] installs the Redis transport. redis is also pinned below because
 # it is used directly (src/redis/cache.py, queues.py, locks.py, session_state.py).
+celery[redis]==5.5.0
 redis==5.2.1
 
 
