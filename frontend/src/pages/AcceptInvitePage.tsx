@@ -93,7 +93,7 @@ export default function AcceptInvitePage() {
             {...register('password')}
             type="password"
             autoComplete="new-password"
-            className="rounded border border-surface-subtle px-3 py-2 focus:outline-brand"
+            className="rounded border border-surface-subtle bg-white px-3 py-2 text-stone-900 placeholder-stone-400 focus:outline-brand dark:border-stone-600 dark:bg-stone-800 dark:text-white"
           />
           {errors.password && <span className="text-xs text-red-600">{errors.password.message}</span>}
         </label>
@@ -104,7 +104,7 @@ export default function AcceptInvitePage() {
             {...register('confirm')}
             type="password"
             autoComplete="new-password"
-            className="rounded border border-surface-subtle px-3 py-2 focus:outline-brand"
+            className="rounded border border-surface-subtle bg-white px-3 py-2 text-stone-900 placeholder-stone-400 focus:outline-brand dark:border-stone-600 dark:bg-stone-800 dark:text-white"
           />
           {errors.confirm && <span className="text-xs text-red-600">{errors.confirm.message}</span>}
         </label>

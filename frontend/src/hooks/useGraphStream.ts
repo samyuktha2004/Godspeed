@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { env } from '@/config/env'
 import type { GraphNode, GraphEdge, GraphDoneEvent } from '@/types/api'
 
-const MAX_RETRIES   = 5
+const MAX_RETRIES   = 1
 const BASE_DELAY_MS = 1000
 
 type Callbacks = {
@@ -49,6 +49,11 @@ export function useGraphStream() {
           activeRef.current = false
           setGState('done')
           callbacksRef.current?.onDone(msg as GraphDoneEvent)
+        } else if (msg.event === 'error') {
+          // Server signalled a terminal error — stop retrying
+          activeRef.current = false
+          setGState('error')
+          callbacksRef.current?.onError(msg.message ?? 'Graph unavailable')
         }
       } catch {
         // Non-JSON frame — ignore

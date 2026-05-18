@@ -24,15 +24,17 @@ class BM25Store:
             return []
         return re.findall(r"\b\w+\b", text.lower())
 
-    def rebuild_index(self, chunk_ids: List[str], texts: List[str]) -> None:
+    def rebuild_index(self, chunk_ids: List[str], texts: List[str], metadata: List[dict] | None = None) -> None:
         if not chunk_ids or not texts:
             logger.warning("BM25: empty corpus provided")
             return
         if len(chunk_ids) != len(texts):
             raise ValueError(f"chunk_ids ({len(chunk_ids)}) != texts ({len(texts)})")
+        if metadata is not None and len(metadata) != len(chunk_ids):
+            raise ValueError(f"metadata ({len(metadata)}) != chunk_ids ({len(chunk_ids)})")
 
-        cleaned_ids, cleaned_texts, tokenized_corpus = [], [], []
-        for chunk_id, text in zip(chunk_ids, texts):
+        cleaned_ids, cleaned_texts, tokenized_corpus, cleaned_metadata = [], [], [], []
+        for i, (chunk_id, text) in enumerate(zip(chunk_ids, texts)):
             if not chunk_id or not text or not text.strip():
                 continue
             tokens = self.tokenize(text)
@@ -41,12 +43,18 @@ class BM25Store:
             cleaned_ids.append(chunk_id)
             cleaned_texts.append(text)
             tokenized_corpus.append(tokens)
+            if metadata is not None:
+                cleaned_metadata.append(metadata[i])
 
         if not tokenized_corpus:
             raise ValueError("No valid documents to index")
 
+        payload = {"index": BM25Okapi(tokenized_corpus), "doc_ids": cleaned_ids, "corpus": cleaned_texts}
+        if metadata is not None:
+            payload["metadata"] = cleaned_metadata
+
         with self.index_path.open("wb") as f:
-            pickle.dump({"index": BM25Okapi(tokenized_corpus), "doc_ids": cleaned_ids, "corpus": cleaned_texts}, f)
+            pickle.dump(payload, f)
 
         logger.info("BM25 rebuilt with %d documents -> %s", len(cleaned_ids), self.index_path)
 
@@ -78,4 +86,5 @@ def rebuild_from_supabase() -> None:
     store.rebuild_index(
         chunk_ids=[r["chunk_id"] for r in rows],
         texts=[r["text"] for r in rows],
+        metadata=[{"source": r.get("source", ""), "source_type": r.get("source_type", "internal")} for r in rows],
     )

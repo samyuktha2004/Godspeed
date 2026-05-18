@@ -1,4 +1,4 @@
-"""Shared Gemini call helper with exponential-backoff retry."""
+"""LLM call helper with exponential-backoff retry. Uses OpenAI when key is set, else Gemini."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import json
 import logging
 from typing import Any
 
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.config import settings
@@ -15,16 +14,33 @@ from agent.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _make_llm(model_name: str, streaming: bool = False):
+    openai_key = getattr(settings, "openai_api_key", "")
+    if openai_key:
+        from langchain_openai import ChatOpenAI
+        # Map Gemini model names to OpenAI equivalents
+        oai_model = "gpt-4o-mini"
+        return ChatOpenAI(
+            model=oai_model,
+            api_key=openai_key,
+            temperature=0.0,
+            streaming=streaming,
+        )
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    return ChatGoogleGenerativeAI(
+        model=model_name,
+        google_api_key=settings.google_api_key,
+        temperature=0.0,
+        streaming=streaming,
+    )
+
+
 async def call_gemini_text(
     model_name: str,
     system_prompt: str,
     user_message: str,
 ) -> str:
-    llm = ChatGoogleGenerativeAI(
-        model=model_name,
-        google_api_key=settings.google_api_key,
-        temperature=0.0,
-    )
+    llm = _make_llm(model_name)
     messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
 
     for attempt in range(settings.gemini_max_retries):
@@ -33,10 +49,10 @@ async def call_gemini_text(
             return response.content
         except Exception as exc:
             if attempt == settings.gemini_max_retries - 1:
-                logger.error("Gemini call failed after %d retries: %s", settings.gemini_max_retries, exc)
+                logger.error("LLM call failed after %d retries: %s", settings.gemini_max_retries, exc)
                 raise
             delay = settings.gemini_retry_base_delay * (2 ** attempt)
-            logger.warning("Gemini call attempt %d failed (%s); retrying in %.1fs", attempt + 1, exc, delay)
+            logger.warning("LLM call attempt %d failed (%s); retrying in %.1fs", attempt + 1, exc, delay)
             await asyncio.sleep(delay)
 
     raise RuntimeError("Unreachable")
@@ -48,7 +64,6 @@ async def call_gemini_json(
     user_message: str,
 ) -> dict[str, Any]:
     raw = await call_gemini_text(model_name, system_prompt, user_message)
-    # Strip markdown code fences if model ignores the instruction
     cleaned = raw.strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.split("\n", 1)[-1]
@@ -57,7 +72,7 @@ async def call_gemini_json(
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        logger.error("Failed to parse Gemini JSON response: %s\nRaw: %s", exc, raw[:500])
+        logger.error("Failed to parse LLM JSON response: %s\nRaw: %s", exc, raw[:500])
         raise
 
 
@@ -66,12 +81,7 @@ async def stream_gemini_text(
     system_prompt: str,
     user_message: str,
 ):
-    llm = ChatGoogleGenerativeAI(
-        model=model_name,
-        google_api_key=settings.google_api_key,
-        temperature=0.0,
-        streaming=True,
-    )
+    llm = _make_llm(model_name, streaming=True)
     messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
 
     for attempt in range(settings.gemini_max_retries):
@@ -81,8 +91,8 @@ async def stream_gemini_text(
             return
         except Exception as exc:
             if attempt == settings.gemini_max_retries - 1:
-                logger.error("Gemini stream failed after %d retries: %s", settings.gemini_max_retries, exc)
+                logger.error("LLM stream failed after %d retries: %s", settings.gemini_max_retries, exc)
                 raise
             delay = settings.gemini_retry_base_delay * (2 ** attempt)
-            logger.warning("Gemini stream attempt %d failed (%s); retrying in %.1fs", attempt + 1, exc, delay)
+            logger.warning("LLM stream attempt %d failed (%s); retrying in %.1fs", attempt + 1, exc, delay)
             await asyncio.sleep(delay)

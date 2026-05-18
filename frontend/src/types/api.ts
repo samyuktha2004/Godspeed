@@ -5,7 +5,7 @@ export interface QueryInput {
 }
 
 export interface AgentTask {
-  agent:      'doc_search' | 'ticket_lookup' | 'live_docs' | 'summariser'
+  agent:      'doc_search' | 'ticket_lookup' | 'confluence_search' | 'slack_search' | 'live_docs' | 'summariser' | 'sql_query'
   input:      string
   depends_on: string[]
 }

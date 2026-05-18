@@ -21,9 +21,11 @@ export function useNotifications() {
 
     ws.onmessage = (evt) => {
       try {
-        const msg = JSON.parse(evt.data as string) as Omit<AppNotification, 'id' | 'read'>
+        const msg = JSON.parse(evt.data as string)
+        // Skip keepalive pings and any frame without a real message
+        if (!msg.message || msg.type === 'ping') return
         const notification: AppNotification = {
-          ...msg,
+          ...(msg as Omit<AppNotification, 'id' | 'read'>),
           id:   crypto.randomUUID(),
           read: false,
         }

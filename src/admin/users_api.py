@@ -52,7 +52,7 @@ async def list_users(user=Depends(require_role("admin", "org_admin"))) -> dict:
         result = (
             _client()
             .table("users")
-            .select("id, email, name, role, is_active, is_new_hire, workspace_id, team_id")
+            .select("id, email, name, role, is_active")
             .eq("workspace_id", DEFAULT_WORKSPACE_ID)
             .order("name")
             .execute()

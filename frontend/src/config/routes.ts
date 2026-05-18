@@ -65,7 +65,9 @@ export const queryRoute = createRoute({
   beforeLoad:         requireAuth,
   component:          QueryPage,
   validateSearch: (s: Record<string, unknown>) => ({
-    q: typeof s.q === 'string' ? s.q : undefined,
+    q:     typeof s.q   === 'string' ? s.q   : undefined,
+    qid:   typeof s.qid === 'string' ? s.qid : undefined,
+    fresh: s.fresh === true || s.fresh === 'true',
   }),
 })
 
@@ -88,6 +90,9 @@ export const workspaceRoute = createRoute({
   path: '/workspace',
   beforeLoad:     requireAuth,
   component:      Workspace,
+  validateSearch: (s: Record<string, unknown>) => ({
+    id: typeof s.id === 'string' ? s.id : undefined,
+  }),
 })
 
 export const settingsRoute = createRoute({

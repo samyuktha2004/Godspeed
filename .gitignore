@@ -38,3 +38,6 @@ Thumbs.db
 celerybeat-schedule
 celerybeat.pid
 .env
+frontend/node_modules/
+frontend/package-lock.json
+frontend/tsconfig.tsbuildinfo

@@ -44,7 +44,7 @@ export default function LoginPage() {
             {...register('email')}
             type="email"
             autoComplete="email"
-            className="rounded border border-surface-subtle px-3 py-2 focus:outline-brand"
+            className="rounded border border-surface-subtle bg-white px-3 py-2 text-stone-900 placeholder-stone-400 focus:outline-brand dark:border-stone-600 dark:bg-stone-800 dark:text-white"
           />
           {errors.email && <span className="text-red-600 text-xs">{errors.email.message}</span>}
         </label>
@@ -55,7 +55,7 @@ export default function LoginPage() {
             {...register('password')}
             type="password"
             autoComplete="current-password"
-            className="rounded border border-surface-subtle px-3 py-2 focus:outline-brand"
+            className="rounded border border-surface-subtle bg-white px-3 py-2 text-stone-900 placeholder-stone-400 focus:outline-brand dark:border-stone-600 dark:bg-stone-800 dark:text-white"
           />
           {errors.password && <span className="text-red-600 text-xs">{errors.password.message}</span>}
         </label>

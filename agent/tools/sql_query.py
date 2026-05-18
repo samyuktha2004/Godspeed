@@ -94,8 +94,8 @@ async def run_sql_query(
     team_id: str,
     allowed_channel_ids: list[str] | None = None,
 ) -> list[RetrievedChunk]:
-    if not settings.database_url:
-        logger.warning("sql_query: DATABASE_URL not configured — skipping")
+    if not settings.effective_database_url:
+        logger.warning("sql_query: DATABASE_URL / PG_DSN not configured — skipping")
         return []
 
     # --- Step 1: NL → SQL via Gemini Flash ---
@@ -128,7 +128,7 @@ async def run_sql_query(
         return []
 
     # Replace placeholder with positional parameter for asyncpg
-    parameterized_sql = raw_sql.replace("'<TEAM_ID_PLACEHOLDER>'", "$1")
+    parameterized_sql = re.sub(r"'<TEAM_ID_PLACEHOLDER>'", "$1", raw_sql, count=1)
 
     # --- Step 3: Safety validation ---
     ok, reason = _validate_sql(parameterized_sql)
@@ -140,7 +140,7 @@ async def run_sql_query(
     try:
         import asyncpg  # imported lazily — only needed when tool is active
 
-        conn = await asyncpg.connect(settings.database_url)
+        conn = await asyncpg.connect(settings.effective_database_url)
         try:
             rows = await conn.fetch(parameterized_sql, team_id)
         finally:

@@ -432,10 +432,11 @@ async def send_invite(
         f"<p><a href=\"{invite_url}\">Accept your invitation</a></p>"
         f"<p>This link expires in 7 days.</p>"
     )
-    send_email(to=email, subject="You're invited to GodSpeed", html=html)
+    from src.auth.email import send_email_sync
+    email_sent = send_email_sync(to=email, subject="You're invited to GodSpeed", html=html)
 
-    logger.info("invite_sent to=%s by=%s role=%s", email, caller["id"], body.role)
-    return {"ok": True, "email": email}
+    logger.info("invite_sent to=%s by=%s role=%s email_sent=%s", email, caller["id"], body.role, email_sent)
+    return {"ok": True, "email": email, "invite_url": invite_url, "email_sent": email_sent}
 
 
 @router.get("/invite/{token}")

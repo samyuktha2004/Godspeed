@@ -1,4 +1,4 @@
-"""Jira ticket lookup — searches ingested Jira chunks from Qdrant."""
+"""Confluence page search — retrieves ingested Confluence chunks from Qdrant."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from agent.models import RetrievedChunk
 logger = logging.getLogger(__name__)
 
 
-async def run_ticket_lookup(query: str, team_id: str) -> list[RetrievedChunk]:
-    """Search Qdrant for Jira chunks matching the query."""
+async def run_confluence_search(query: str, team_id: str) -> list[RetrievedChunk]:
+    """Search Qdrant for Confluence chunks matching the query."""
     from qdrant_client import AsyncQdrantClient
     from qdrant_client.http import models as qmodels
     from agent.tools.doc_search import _get_embedding_model
@@ -31,9 +31,9 @@ async def run_ticket_lookup(query: str, team_id: str) -> list[RetrievedChunk]:
         from agent.tools.doc_search import _get_qdrant_client
         client = _get_qdrant_client()
 
-        jira_filter = qmodels.Filter(
+        conf_filter = qmodels.Filter(
             must=[
-                qmodels.FieldCondition(key="source_type", match=qmodels.MatchValue(value="jira")),
+                qmodels.FieldCondition(key="source_type", match=qmodels.MatchValue(value="confluence")),
                 qmodels.FieldCondition(key="team_id",     match=qmodels.MatchValue(value=team_id)),
             ]
         )
@@ -42,7 +42,7 @@ async def run_ticket_lookup(query: str, team_id: str) -> list[RetrievedChunk]:
             collection_name=settings.qdrant_collection,
             query=dense_vector,
             using=settings.qdrant_dense_vector_name,
-            query_filter=jira_filter,
+            query_filter=conf_filter,
             limit=10,
             with_payload=True,
         )
@@ -54,14 +54,14 @@ async def run_ticket_lookup(query: str, team_id: str) -> list[RetrievedChunk]:
                 chunk_id=p.get("chunk_id", str(hit.id)),
                 text=p.get("text", ""),
                 source=p.get("source", ""),
-                source_type="jira",
+                source_type="confluence",
                 score=hit.score,
                 metadata=p.get("metadata", {}),
             ))
 
-        logger.info("ticket_lookup: found %d chunks for query=%r team=%s", len(chunks), query, team_id)
+        logger.info("confluence_search: found %d chunks for query=%r team=%s", len(chunks), query, team_id)
         return chunks
 
     except Exception:
-        logger.exception("ticket_lookup: search failed")
+        logger.exception("confluence_search: search failed")
         return []

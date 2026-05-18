@@ -77,7 +77,7 @@ app.include_router(tools_router)
 
 
 # ---------------------------------------------------------------------------
-# Health endpoint — pinged by admin dashboard + Docker healthcheck
+# Health endpoint — must be registered BEFORE the SPA catch-all
 # ---------------------------------------------------------------------------
 
 @app.get("/health", tags=["infra"])
@@ -130,3 +130,22 @@ async def health() -> dict:
         results["status"] = "degraded"
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Serve React build — SPA catch-all MUST be last (catches everything else)
+# ---------------------------------------------------------------------------
+import os as _os
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse as _FileResponse
+
+_dist = _os.path.join(_os.path.dirname(__file__), "frontend", "dist")
+if _os.path.exists(_dist):
+    app.mount("/assets", StaticFiles(directory=_os.path.join(_dist, "assets")), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        file = _os.path.join(_dist, full_path)
+        if _os.path.isfile(file):
+            return _FileResponse(file)
+        return _FileResponse(_os.path.join(_dist, "index.html"))

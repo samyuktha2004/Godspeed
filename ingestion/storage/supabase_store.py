@@ -134,7 +134,7 @@ def update_cag_snapshot(team_id: str, snapshot: str, client: Optional[Client] = 
 def get_all_chunks(client: Optional[Client] = None) -> list[dict[str, Any]]:
     sb = client or get_client()
     try:
-        result = sb.table("chunks").select("chunk_id, text").execute()
+        result = sb.table("chunks").select("chunk_id, text, source, source_type").execute()
         return result.data or []
     except Exception:
         logger.exception("supabase_store: failed to fetch all chunks")

@@ -10,14 +10,17 @@ class Settings(BaseSettings):
     )
 
     google_api_key: str = ""
+    openai_api_key: str = ""
 
-    planner_model: str = "gemini-2.5-pro"
-    synthesiser_model: str = "gemini-2.5-pro"
-    summariser_model: str = "gemini-2.5-flash"
-    guardrail_model: str = "gemini-2.5-flash"
+    planner_model: str = "gemini-2.0-flash"
+    synthesiser_model: str = "gemini-2.0-flash"
+    summariser_model: str = "gemini-2.0-flash"
+    guardrail_model: str = "gemini-2.0-flash"
 
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
+    qdrant_url: str = ""        # overrides host+port when set (Qdrant Cloud)
+    qdrant_api_key: str = ""    # required for Qdrant Cloud
     qdrant_collection: str = "knowledge_base"
     qdrant_dense_vector_name: str = "dense"
     qdrant_sparse_vector_name: str = "sparse"
@@ -33,7 +36,7 @@ class Settings(BaseSettings):
     rrf_top_k: int = 50
     final_top_k: int = 5
     reranker_high_threshold: float = 0.6
-    reranker_medium_threshold: float = 0.4
+    reranker_medium_threshold: float = 0.3
     live_docs_confidence_threshold: float = 0.5
 
     gemini_max_retries: int = 3
@@ -49,8 +52,14 @@ class Settings(BaseSettings):
     # NL-to-SQL tool — direct PostgreSQL connection string.
     # e.g. postgresql://postgres:password@db.yourproject.supabase.co:5432/postgres
     # Leave empty to disable the sql_query agent gracefully.
+    # Reads DATABASE_URL or PG_DSN from environment.
     database_url: str = ""
+    pg_dsn: str = ""
     sql_max_rows: int = 20
+
+    @property
+    def effective_database_url(self) -> str:
+        return self.database_url or self.pg_dsn
 
 
 settings = Settings()

@@ -165,7 +165,7 @@ export function Sidebar() {
               {recent.map((item) => (
                 <button
                   key={item.id}
-                  onClick={() => navigate({ to: '/query', search: { q: item.query } })}
+                  onClick={() => navigate({ to: '/query', search: { q: item.query, qid: undefined, fresh: false } })}
                   title={item.query}
                   className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-stone-50 dark:hover:bg-stone-900"
                 >
@@ -175,7 +175,7 @@ export function Sidebar() {
                       item.success ? 'bg-green-400' : 'bg-stone-300',
                     )}
                   />
-                  <span className="truncate text-xs text-stone-500 dark:text-stone-400">
+                  <span className="truncate text-xs text-stone-500 dark:text-stone-400" title={item.query}>
                     {item.query.length > 34 ? item.query.slice(0, 34) + '…' : item.query}
                   </span>
                 </button>

@@ -68,6 +68,13 @@ export function KnowledgeGraph({ nodes, edges, streaming, onNodeClick, onNodeHov
       if (!containerRef.current) return
 
       const el = containerRef.current
+
+      // Track real mouse position since force-graph's onNodeHover doesn't provide it
+      let mouseX = 0
+      let mouseY = 0
+      const trackMouse = (e: MouseEvent) => { mouseX = e.clientX; mouseY = e.clientY }
+      el.addEventListener('mousemove', trackMouse)
+
       const fg = ForceGraph2D()
       fg(el)
       fg.backgroundColor('transparent')
@@ -85,7 +92,7 @@ export function KnowledgeGraph({ nodes, edges, streaming, onNodeClick, onNodeHov
           onNodeClick({ id: n.id, label: n.label, name: n.name })
         })
         .onNodeHover((n: FGNode | null) => {
-          onNodeHover(n ? { id: n.id, label: n.label, name: n.name } : null, 0, 0)
+          onNodeHover(n ? { id: n.id, label: n.label, name: n.name } : null, mouseX, mouseY)
         })
       graphRef.current = fg
 
@@ -108,6 +115,7 @@ export function KnowledgeGraph({ nodes, edges, streaming, onNodeClick, onNodeHov
       ro?.disconnect()
       graphRef.current?._destructor?.()
       graphRef.current = null
+      // trackMouse listener is on el which is removed from DOM — GC handles it
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

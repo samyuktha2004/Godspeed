@@ -31,24 +31,26 @@ async def _redis() -> aioredis.Redis:
 def _default_sources() -> list[dict]:
     """Build source list from env vars that are set."""
     sources = []
-    if os.getenv("JIRA_INSTANCE_URL") or settings.integrations.jira_instance_url:
+    jira_url = os.getenv("JIRA_BASE_URL") or os.getenv("JIRA_INSTANCE_URL") or settings.integrations.jira_instance_url
+    if jira_url:
         sources.append({
             "id":          "jira-default",
             "type":        "jira",
             "name":        "Jira",
-            "url":         settings.integrations.jira_instance_url or "https://your-org.atlassian.net",
-            "enabled":     bool(settings.integrations.jira_api_token),
+            "url":         jira_url,
+            "enabled":     bool(os.getenv("JIRA_API_TOKEN") or settings.integrations.jira_api_token),
             "last_sync":   None,
             "sync_status": "idle",
             "error_msg":   None,
         })
-    if os.getenv("CONFLUENCE_URL") or os.getenv("CONFLUENCE_SPACE_KEY"):
+    confluence_url = os.getenv("CONFLUENCE_BASE_URL") or os.getenv("CONFLUENCE_URL")
+    if confluence_url:
         sources.append({
             "id":          "confluence-default",
             "type":        "confluence",
             "name":        "Confluence",
-            "url":         os.getenv("CONFLUENCE_URL", "https://your-org.atlassian.net/wiki"),
-            "enabled":     bool(os.getenv("CONFLUENCE_API_TOKEN")),
+            "url":         confluence_url,
+            "enabled":     bool(os.getenv("CONFLUENCE_TOKEN") or os.getenv("CONFLUENCE_API_TOKEN")),
             "last_sync":   None,
             "sync_status": "idle",
             "error_msg":   None,

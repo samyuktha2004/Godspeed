@@ -15,7 +15,11 @@ export default function OAuthCallbackPage() {
     const hasError = params.get('error') !== null
 
     if (hasError) {
-      addToast({ type: 'error', message: 'Google sign-in failed. Please try again.' })
+      const error = params.get('error')
+      const message = error === 'not_invited'
+        ? 'Your Google account is not linked to any workspace. Ask an admin to invite you first.'
+        : 'Google sign-in failed. Please try again.'
+      addToast({ type: 'error', message })
       navigate({ to: '/login' })
       return
     }

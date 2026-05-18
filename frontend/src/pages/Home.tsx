@@ -6,7 +6,7 @@ export default function Home() {
   const navigate = useNavigate()
 
   const handleQuery = (query: string) => {
-    navigate({ to: '/query', search: { q: query } })
+    navigate({ to: '/query', search: { q: query, qid: undefined, fresh: false } })
   }
 
   return (

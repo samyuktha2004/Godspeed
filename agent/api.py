@@ -31,11 +31,16 @@ async def _store_query_event(
     agent_results: dict | None = None,
     guardrail_score: float | None = None,
     escalated: bool = False,
+    answer_text: str = "",
 ) -> None:
     """Persist query event to Redis for analytics and workspace history."""
     try:
         import redis.asyncio as aioredis
         from src.config import settings
+
+        brief = answer_text[:500].rstrip() if answer_text else ""
+        if answer_text and len(answer_text) > 500:
+            brief += "…"
 
         event = {
             "id":           str(uuid4()),
@@ -45,7 +50,7 @@ async def _store_query_event(
             "created_at":   datetime.utcnow().isoformat(),
             "success":      success,
             "duration_ms":  duration_ms,
-            "answer_brief": "",
+            "answer_brief": brief,
             # Per-agent retrieval metrics — populated from final graph state
             "agents": {
                 agent: {
@@ -122,6 +127,7 @@ async def _event_generator(
                     agent_results=final_state.get("agent_results", {}),
                     guardrail_score=final_state.get("guardrail_score"),
                     escalated=final_state.get("escalate", False),
+                    answer_text=final_state.get("final_answer") or "",
                 )
             except Exception as exc:
                 logger.exception(
