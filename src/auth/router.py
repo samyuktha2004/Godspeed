@@ -63,12 +63,17 @@ _CREDENTIALS: dict[str, dict] = {
 
 
 def _make_cookie_kwargs() -> dict:
-    """Cookie attributes — secure=True when running behind HTTPS."""
+    """Cookie attributes — SameSite=None+Secure when embedded in a cross-site iframe (e.g. HF Spaces)."""
+    import os as _os
+    # HuggingFace injects SPACE_ID into every Space container
+    on_hf = bool(_os.environ.get("SPACE_ID") or _os.environ.get("SPACE_AUTHOR_NAME"))
+    samesite = "none" if on_hf else settings.cookie_samesite
+    secure   = True   if on_hf else settings.cookie_secure
     return {
         "httponly": True,
-        "samesite": "lax",
+        "samesite": samesite,
         "max_age":  SESSION_TTL,
-        "secure":   settings.cookie_secure,
+        "secure":   secure,
     }
 
 
