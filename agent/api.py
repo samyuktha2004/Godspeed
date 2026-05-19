@@ -168,10 +168,11 @@ async def query_endpoint(
     user: dict = Depends(get_current_user),
 ) -> StreamingResponse:
     # Enforce server-side team_id and channel IDs — never trust the client body.
-    # model_copy creates a new immutable instance with the overridden fields.
+    # Admins bypass RBAC channel filtering so they can search the full knowledge base.
+    is_admin = user.get("role") in ("admin", "org_admin")
     query_input = query_input.model_copy(update={
         "team_id":             user.get("team_id", query_input.team_id),
-        "allowed_channel_ids": user.get("allowed_channel_ids", []),
+        "allowed_channel_ids": [] if is_admin else user.get("allowed_channel_ids", []),
     })
 
     queue: asyncio.Queue = asyncio.Queue()
