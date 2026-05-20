@@ -22,10 +22,12 @@ export function GraphIngestButton({ chunkIds, teamId = 'default' }: Props) {
         method: 'POST',
         body:   JSON.stringify(body),
       })
-      const data = await res.json() as { ingested: number }
+      const data = await res.json() as { ingested: number; total: number; failed: number }
       addToast({
         type:    'success',
-        message: `Ingested ${data.ingested} entit${data.ingested === 1 ? 'y' : 'ies'} into knowledge graph`,
+        message: data.failed > 0
+          ? `Graph extraction: ${data.ingested}/${data.total} chunks ingested, ${data.failed} failed`
+          : `Ingested ${data.ingested} chunk${data.ingested === 1 ? '' : 's'} into knowledge graph`,
       })
     } catch (err) {
       if (!(err instanceof ApiError)) {

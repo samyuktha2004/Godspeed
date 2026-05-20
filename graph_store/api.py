@@ -62,7 +62,7 @@ async def graph_ingest(request: GraphIngestRequest) -> dict:
         raise HTTPException(status_code=502, detail="Failed to fetch chunks from Supabase")
 
     if not rows:
-        return {"ingested": 0}
+        return {"ingested": 0, "total": 0, "failed": 0}
 
     texts = [r["text"] for r in rows]
     # Run Gemini extraction first (can take minutes) — driver created AFTER this
@@ -92,8 +92,10 @@ async def graph_ingest(request: GraphIngestRequest) -> dict:
     finally:
         await driver.close()
 
-    logger.info("graph_ingest_done", extra={"ingested": ingested, "total": len(rows)})
-    return {"ingested": ingested}
+    total  = len(rows)
+    failed = total - ingested
+    logger.info("graph_ingest_done", extra={"ingested": ingested, "total": total, "failed": failed})
+    return {"ingested": ingested, "total": total, "failed": failed}
 
 
 @router.get("/traverse")

@@ -9,8 +9,8 @@ import { cn } from '@/lib/utils'
 interface DomainScore {
   domain:    string
   coverage:  number
-  freshness: number
-  accuracy:  number
+  freshness: number | null
+  accuracy:  number | null
   score:     number
 }
 
@@ -37,7 +37,16 @@ function ScoreBadge({ value }: { value: number }) {
   )
 }
 
-function HeatCell({ value }: { value: number }) {
+function HeatCell({ value }: { value: number | null }) {
+  if (value === null) {
+    return (
+      <td className="px-2 py-2 text-center">
+        <div className="mx-auto h-8 w-16 rounded flex items-center justify-center text-xs font-medium bg-stone-100 text-stone-400 dark:bg-stone-800 dark:text-stone-500">
+          N/A
+        </div>
+      </td>
+    )
+  }
   const pct = Math.round(value * 100)
   const bg =
     pct >= 80 ? 'bg-green-500' :
@@ -65,9 +74,9 @@ export function KnowledgeHealthDashboard() {
   const overall = data ? Math.round(data.overall_score * 100) : 0
   const radarData = data?.domains.map((d) => ({
     domain:    d.domain,
-    Coverage:  Math.round(d.coverage  * 100),
-    Freshness: Math.round(d.freshness * 100),
-    Accuracy:  Math.round(d.accuracy  * 100),
+    Coverage:  Math.round(d.coverage * 100),
+    Freshness: d.freshness !== null ? Math.round(d.freshness * 100) : 0,
+    Accuracy:  d.accuracy  !== null ? Math.round(d.accuracy  * 100) : 0,
   })) ?? []
 
   return (

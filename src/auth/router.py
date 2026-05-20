@@ -63,52 +63,74 @@ _CREDENTIALS: dict[str, dict] = {
 
 
 def _make_cookie_kwargs() -> dict:
-    """Cookie attributes — secure=True when running behind HTTPS."""
+    """Cookie attributes — SameSite=None+Secure when embedded in a cross-site iframe (e.g. HF Spaces)."""
+    import os as _os
+    # HuggingFace injects SPACE_ID into every Space container
+    on_hf = bool(_os.environ.get("SPACE_ID") or _os.environ.get("SPACE_AUTHOR_NAME"))
+    samesite = "none" if on_hf else settings.cookie_samesite
+    secure   = True   if on_hf else settings.cookie_secure
     return {
         "httponly": True,
-        "samesite": "lax",
+        "samesite": samesite,
         "max_age":  SESSION_TTL,
-        "secure":   settings.cookie_secure,
+        "secure":   secure,
     }
 
 
 async def _redis() -> aioredis.Redis:
-    return aioredis.from_url(settings.redis_url, decode_responses=True)
+    return aioredis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        socket_timeout=5,
+        socket_connect_timeout=5,
+    )
+
+
+# In-memory fallback when Redis is unreachable (single-process deploy)
+_mem_sessions: dict[str, str] = {}
 
 
 async def _get_session(session_id: str) -> dict | None:
-    r = await _redis()
     try:
-        raw = await r.get(f"gs:session:{session_id}")
-        return json.loads(raw) if raw else None
-    except Exception as exc:
-        logger.warning("session_read_failed", extra={"error": str(exc)})
-        return None
-    finally:
-        await r.aclose()
+        r = await _redis()
+        try:
+            raw = await r.get(f"gs:session:{session_id}")
+            if raw:
+                return json.loads(raw)
+        finally:
+            await r.aclose()
+    except Exception:
+        pass
+    # Fallback to in-memory
+    raw = _mem_sessions.get(session_id)
+    return json.loads(raw) if raw else None
 
 
 async def _set_session(session_id: str, payload: dict) -> bool:
-    """Returns False if Redis is unavailable."""
-    r = await _redis()
+    serialised = json.dumps(payload)
     try:
-        await r.setex(f"gs:session:{session_id}", SESSION_TTL, json.dumps(payload))
-        return True
+        r = await _redis()
+        try:
+            await r.setex(f"gs:session:{session_id}", SESSION_TTL, serialised)
+            return True
+        finally:
+            await r.aclose()
     except Exception as exc:
-        logger.error("session_write_failed", extra={"error": str(exc)})
-        return False
-    finally:
-        await r.aclose()
+        logger.warning("redis_unavailable — using in-memory session store", extra={"error": str(exc)})
+        _mem_sessions[session_id] = serialised
+        return True
 
 
 async def _del_session(session_id: str) -> None:
-    r = await _redis()
+    _mem_sessions.pop(session_id, None)
     try:
-        await r.delete(f"gs:session:{session_id}")
-    except Exception as exc:
-        logger.warning("session_delete_failed", extra={"error": str(exc)})
-    finally:
-        await r.aclose()
+        r = await _redis()
+        try:
+            await r.delete(f"gs:session:{session_id}")
+        finally:
+            await r.aclose()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -127,10 +149,14 @@ async def login(body: LoginRequest, response: Response) -> dict:
 
     # ── Try DB-backed auth first ─────────────────────────────
     try:
+        import asyncio
         import bcrypt
         from src.auth.db import get_allowed_channel_ids, get_user_by_email, get_user_team_id
 
-        db_user = get_user_by_email(email)
+        db_user = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, get_user_by_email, email),
+            timeout=5,
+        )
         if db_user and db_user.get("password_hash"):
             pw_match = bcrypt.checkpw(
                 body.password.encode(),
@@ -432,10 +458,11 @@ async def send_invite(
         f"<p><a href=\"{invite_url}\">Accept your invitation</a></p>"
         f"<p>This link expires in 7 days.</p>"
     )
-    send_email(to=email, subject="You're invited to GodSpeed", html=html)
+    from src.auth.email import send_email_sync
+    email_sent = send_email_sync(to=email, subject="You're invited to GodSpeed", html=html)
 
-    logger.info("invite_sent to=%s by=%s role=%s", email, caller["id"], body.role)
-    return {"ok": True, "email": email}
+    logger.info("invite_sent to=%s by=%s role=%s email_sent=%s", email, caller["id"], body.role, email_sent)
+    return {"ok": True, "email": email, "invite_url": invite_url, "email_sent": email_sent}
 
 
 @router.get("/invite/{token}")

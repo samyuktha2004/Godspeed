@@ -2,7 +2,29 @@
   "permissions": {
     "allow": [
       "Bash(Get-ChildItem -Path \"d:\\\\Godspeed\" -Recurse -Include \"*.py\")",
-      "Bash(Select-Object -First 20)"
+      "Bash(Select-Object -First 20)",
+      "Bash(dir /s /b d:\\\\Godspeed)",
+      "Bash(xargs wc -l)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Godspeed\" -Directory)",
+      "Bash(Select-Object Name)",
+      "Bash(xargs grep -l \"anomaly\\\\|forecast\\\\|spike\\\\|trend\")",
+      "Bash(xargs grep -l \"validation\\\\|critic\\\\|generator\")",
+      "Bash(grep -E \"\\\\.py$\")",
+      "Bash(xargs grep -l \"BM25\\\\|qdrant\\\\|dense\\\\|sparse\\\\|retrieval\")",
+      "Bash(Get-ChildItem -Path \"d:\\\\Godspeed\" -Force)",
+      "Bash(Select-Object Name, FullName)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Godspeed\" -Recurse -Directory)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(xargs grep -l \"FastAPI\\\\|APIRouter\")",
+      "Bash(xargs grep -l \"redis\\\\|Redis\")",
+      "Bash(xargs grep -l \"apiFetch\\\\|http\")",
+      "PowerShell(Get-ChildItem -Path \"d:\\\\Godspeed\" -Force | Select-Object Name, @{Name=\"Type\"; Expression={if\\($_.PSIsContainer\\) {\"Dir\"} else {\"File\"}}} | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path \"d:\\\\Godspeed\\\\agent\" -Recurse | Select-Object FullName | ForEach-Object { $_.FullName.Replace\\(\"d:\\\\Godspeed\\\\\", \"\"\\) })",
+      "PowerShell(Get-ChildItem -Path \"d:\\\\Godspeed\\\\src\" -Recurse | Select-Object FullName | ForEach-Object { $_.FullName.Replace\\(\"d:\\\\Godspeed\\\\\", \"\"\\) })",
+      "PowerShell(Get-ChildItem -Path \"d:\\\\Godspeed\\\\frontend\" -Recurse -Depth 2 | Where-Object { -not $_.PSIsContainer } | Select-Object FullName | ForEach-Object { $_.FullName.Replace\\(\"d:\\\\Godspeed\\\\\", \"\"\\) } | Sort-Object | Select-Object -First 40)",
+      "PowerShell(Get-ChildItem -Path \"d:\\\\Godspeed\\\\ingestion\" -Recurse | Where-Object { -not $_.PSIsContainer } | Select-Object FullName | ForEach-Object { $_.FullName.Replace\\(\"d:\\\\Godspeed\\\\\", \"\"\\) })",
+      "PowerShell(Get-ChildItem -Path \"d:\\\\Godspeed\\\\graph_store\" -Recurse | Where-Object { -not $_.PSIsContainer } | Select-Object FullName | ForEach-Object { $_.FullName.Replace\\(\"d:\\\\Godspeed\\\\\", \"\"\\) })",
+      "Bash(git checkout *)"
     ]
   }
 }

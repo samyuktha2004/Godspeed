@@ -16,7 +16,11 @@ _SOURCE_REGISTRY: dict[str, Any] = {}
 
 
 async def _run_graph_pipeline(embedded, doc) -> None:
-    from graph_store.config import settings as graph_settings
+    try:
+        from graph_store.config import settings as graph_settings
+    except Exception:
+        logger.warning("ingest_job: graph_store not available — skipping graph pipeline")
+        return
 
     if not graph_settings.neo4j_uri:
         logger.warning("ingest_job: NEO4J_URI not set — skipping graph pipeline")
@@ -126,10 +130,10 @@ async def _run_ingest_async(job_id: str, payload: IngestSourcePayload) -> dict[s
             for chunk in chunks:
                 chunk.text = mask_pii(chunk.text)
 
+            upsert_document(doc, client=sb)
             embedded = embed_chunks(chunks)
             qdrant_upsert(embedded)
             sb_upsert_chunks(chunks, client=sb)
-            upsert_document(doc, client=sb)
             total_chunks += len(chunks)
             logger.info("ingest_job: ingested %d chunks for doc_id=%s", len(chunks), doc.doc_id)
 
@@ -148,4 +152,16 @@ async def _run_ingest_async(job_id: str, payload: IngestSourcePayload) -> dict[s
         job.error = str(exc)
 
     upsert_job(job, client=sb)
+
+    # Reflect run outcome back to the admin dashboard source list in Redis
+    try:
+        from src.admin.router import update_source_sync_status
+        await update_source_sync_status(
+            payload.source_type,
+            "ok" if job.status == IngestJobStatus.completed else "error",
+            error_msg=job.error,
+        )
+    except Exception:
+        logger.warning("ingest_job: failed to update source sync_status")
+
     return {"job_id": job_id, "status": job.status.value, "chunks_ingested": total_chunks}

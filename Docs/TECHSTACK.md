@@ -52,7 +52,7 @@
 | **Agent Framework** | LangGraph | Stateful graph execution; explicit node definitions; ReAct pattern built-in | Multi-agent coordination |
 | **LLM Integration** | langchain-google-genai | Unified Gemini interface via LangChain; all agents use Gemini models — no OpenAI dependency in production | Generator + Critic agents |
 | **Primary LLM** | Gemini 2.5 Pro (Google) | Used for planner, synthesiser, and CAG; long context window; best reasoning quality | Planner, Synthesiser (`PLANNER_MODEL`, `SYNTHESISER_MODEL`) |
-| **Fast LLM** | Gemini 2.5 Flash (Google) | Cheap, low-latency inference for light tasks | Summariser, Guardrail, Graph extraction (`SUMMARISER_MODEL`, `GUARDRAIL_MODEL`, `GRAPH_EXTRACTION_MODEL`) |
+| **Fast LLM** | Gemini 2.5 Flash (Google) | Cheap, low-latency inference for light tasks | Summariser, Guardrail, Graph extraction, NL-to-SQL translation (`SUMMARISER_MODEL`, `GUARDRAIL_MODEL`, `GRAPH_EXTRACTION_MODEL`) |
 | **Extraction LLM** | Gemini 2.5 Flash (Google) | Entity/relationship extraction from chunks at ingestion time; strict output schema | graph_store/extractor.py |
 | **Local LLM Fallback** | Ollama + Mistral-7B | For air-gapped deployments; lower quality but zero API dependency | HIPAA/FedRAMP compliance |
 
@@ -60,7 +60,8 @@
 
 | Component | Technology | Rationale | Purpose |
 |---|---|---|---|
-| **Primary DB** | PostgreSQL 15+ | ACID guarantees; full-text search via pg_trgm; JSON support; RBAC audit tables | Metadata, audit trails, RBAC |
+| **Primary DB** | PostgreSQL 15+ (Supabase) | ACID guarantees; full-text search via pg_trgm; JSON support; RBAC audit tables; direct connection via asyncpg for NL-to-SQL agent | Metadata, audit trails, RBAC, sql_query tool |
+| **PostgreSQL Driver** | asyncpg 0.29+ | Native async PostgreSQL driver; used by sql_query tool for direct parameterized query execution | NL-to-SQL agent (`DATABASE_URL`) |
 | **Cache Layer** | Redis (self-hosted or Upstash) | Sub-millisecond reads; sorted sets for leaderboards; pub/sub for real-time notifications | Session state, caching |
 | **Knowledge Graph DB** | Neo4j (self-hosted) | Native graph traversal; Cypher query language; MERGE for idempotent upserts; indexes on chunk_id, doc_id, team_id | Entity/relationship graph, multi-hop traversal for context augmentation |
 | **Document Storage** | S3-compatible (AWS S3 or MinIO) | Durable long-term storage for PDFs, uploaded files, exports | PDFs, user uploads |
@@ -289,6 +290,7 @@ docker-compose up -d  # Prod-grade docker-compose.yml with all services
 - [x] Frontend: React 18 + TypeScript + Vite + shadcn/ui
 - [x] Ingestion: Docling + GLiNER + semantic chunking
 - [x] Retrieval: BGE-M3 + RRF + BGE-reranker-v2-m3
+- [x] NL-to-SQL: sql_query agent (Gemini Flash → validated SELECT → asyncpg)
 - [x] Validation: Generator + Critic (LangGraph)
 - [x] Real-Time: SSE (query streaming) + WebSocket (graph visualization + notifications) + Redis pub/sub
 - [x] Knowledge Graph: Neo4j + Gemini 2.5 Pro extraction (graph_store/)

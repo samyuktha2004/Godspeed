@@ -5,13 +5,15 @@ import { GraphIngestButton } from './GraphIngestButton'
 import { FileUploadWidget } from './FileUploadWidget'
 import { DataSourceManager } from './DataSourceManager'
 import { SystemLogs } from './SystemLogs'
+import { AdminUserManagement } from './AdminUserManagement'
 
-type Tab = 'overview' | 'data-sources' | 'ingest' | 'logs'
+type Tab = 'overview' | 'data-sources' | 'ingest' | 'users' | 'logs'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'overview',      label: 'System Status' },
   { id: 'data-sources',  label: 'Data Sources'  },
   { id: 'ingest',        label: 'Ingest'         },
+  { id: 'users',         label: 'Users'          },
   { id: 'logs',          label: 'System Logs'    },
 ]
 
@@ -45,8 +47,8 @@ export function AdminDashboard() {
           <div className="rounded-xl border border-surface-subtle p-5">
             <p className="mb-4 text-sm font-medium text-stone-500">Sync Controls</p>
             <div className="flex flex-col gap-3">
-              <SyncTrigger source="jira"       sourceKey="ENG"  label="Jira (ENG)"         />
-              <SyncTrigger source="confluence" sourceKey="TEAM" label="Confluence (TEAM)"   />
+              <SyncTrigger source="jira"       sourceKey="KAN"      label="Jira (KAN)"           />
+              <SyncTrigger source="confluence" sourceKey="Godspeed" label="Confluence (Godspeed)" />
             </div>
           </div>
 
@@ -66,6 +68,12 @@ export function AdminDashboard() {
             Files are processed asynchronously — you can close this page after uploading.
           </p>
           <FileUploadWidget />
+        </div>
+      )}
+
+      {tab === 'users' && (
+        <div className="rounded-xl border border-surface-subtle">
+          <AdminUserManagement />
         </div>
       )}
 

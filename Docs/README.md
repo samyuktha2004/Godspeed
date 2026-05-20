@@ -13,17 +13,18 @@
 | [`03_analytics_and_intelligence.md`](./03_analytics_and_intelligence.md) | Query classification, interaction log schema, retrieval feedback loop, NL analytics, health dashboard, proactive agent, silo detector, Areas 4 & 5 planned specs | Building analytics, dashboards, or Area 3 agents |
 | [`04_integrations_and_tech_stack.md`](./04_integrations_and_tech_stack.md) | Notion, Confluence, GitHub integration specs with full code; RBAC enforcement; change detection; tech stack; local dev setup; env vars | Building any integration or setting up development environment |
 | [`05_market_strategy_and_gtm.md`](./05_market_strategy_and_gtm.md) | Target customer, tool strategy, competitor analysis, USPs, country-by-country market analysis, GTM sequencing | Product, positioning, or expansion decisions |
+| [`anomaly-and-forecasting/`](./anomaly-and-forecasting/README.md) | **Area 4 implementation docs** — data layer, detection algorithms, API reference, Celery scheduling | Building or extending anomaly detection, forecasting, or the Anomalies frontend tab |
 
 ---
 
 ## The Five Focus Areas at a Glance
 
 ```
-Area 1 — Hybrid RAG System          [Core — In Scope]
-Area 2 — Data Pipelines & Validation [Core — In Scope]
-Area 3 — Analytics & NL Intelligence [Core — In Scope]
-Area 4 — Anomaly & Forecasting       [Planned Extension]
-Area 5 — Knowledge Graph             [Planned Extension]
+Area 1 — Hybrid RAG System          [Core — Implemented]
+Area 2 — Data Pipelines & Validation [Core — Implemented]
+Area 3 — Analytics & NL Intelligence [Core — Implemented]
+Area 4 — Anomaly & Forecasting       [Implemented — branch: anomaly-and-forecasting]
+Area 5 — Knowledge Graph             [Implemented]
 ```
 
 All five areas are one system — not five products. See `01_problem_and_architecture.md` for the interaction map.

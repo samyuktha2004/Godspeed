@@ -16,6 +16,16 @@ from agent.models import RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
+
+def _get_qdrant_client() -> AsyncQdrantClient:
+    """Return Qdrant client — cloud if QDRANT_URL is set, otherwise local."""
+    if settings.qdrant_url:
+        return AsyncQdrantClient(
+            url=settings.qdrant_url,
+            api_key=settings.qdrant_api_key or None,
+        )
+    return AsyncQdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
+
 _PII_ENTITY_TYPES = [
     "person",
     "email",
@@ -33,6 +43,7 @@ _gliner = None
 _bm25_index: Optional[BM25Okapi] = None
 _bm25_corpus: Optional[list[str]] = None
 _bm25_doc_ids: Optional[list[str]] = None
+_bm25_metadata: Optional[list[dict]] = None
 
 
 def _get_embedding_model():
@@ -47,9 +58,17 @@ def _get_embedding_model():
 def _get_reranker():
     global _reranker
     if _reranker is None:
-        from FlagEmbedding import FlagReranker
-        logger.info("Loading BGE reranker: %s", settings.bge_reranker_model)
-        _reranker = FlagReranker(settings.bge_reranker_model, use_fp16=True)
+        import numpy as np
+        from sentence_transformers import CrossEncoder
+        logger.info("Loading CrossEncoder reranker (ms-marco-MiniLM-L-6-v2)")
+        _model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+        class _Reranker:
+            def compute_score(self, pairs, normalize=True):
+                raw = _model.predict(pairs)
+                if normalize:
+                    return list(1 / (1 + np.exp(-raw)))
+                return list(raw.tolist())
+        _reranker = _Reranker()
     return _reranker
 
 
@@ -62,15 +81,15 @@ def _get_gliner():
     return _gliner
 
 
-def _load_bm25() -> tuple[Optional[BM25Okapi], Optional[list[str]], Optional[list[str]]]:
-    global _bm25_index, _bm25_corpus, _bm25_doc_ids
+def _load_bm25() -> tuple[Optional[BM25Okapi], Optional[list[str]], Optional[list[str]], Optional[list[dict]]]:
+    global _bm25_index, _bm25_corpus, _bm25_doc_ids, _bm25_metadata
     if _bm25_index is not None:
-        return _bm25_index, _bm25_corpus, _bm25_doc_ids
+        return _bm25_index, _bm25_corpus, _bm25_doc_ids, _bm25_metadata
 
     index_path = Path(settings.bm25_index_path)
     if not index_path.exists():
         logger.warning("BM25 index not found at %s — skipping BM25 retrieval", index_path)
-        return None, None, None
+        return None, None, None, None
 
     try:
         with index_path.open("rb") as f:
@@ -78,12 +97,13 @@ def _load_bm25() -> tuple[Optional[BM25Okapi], Optional[list[str]], Optional[lis
         _bm25_index = data["index"]
         _bm25_corpus = data["corpus"]
         _bm25_doc_ids = data["doc_ids"]
+        _bm25_metadata = data.get("metadata")
         logger.info("Loaded BM25 index with %d documents", len(_bm25_doc_ids))
     except Exception:
         logger.exception("Failed to load BM25 index from %s", index_path)
-        return None, None, None
+        return None, None, None, None
 
-    return _bm25_index, _bm25_corpus, _bm25_doc_ids
+    return _bm25_index, _bm25_corpus, _bm25_doc_ids, _bm25_metadata
 
 
 def _mask_pii(text: str) -> str:
@@ -133,7 +153,7 @@ async def run_doc_search(
     sparse_values = [sparse_weights[i] for i in sparse_indices]
 
     bm25_ranked_ids: list[str] = []
-    bm25, corpus, doc_ids = _load_bm25()
+    bm25, corpus, doc_ids, bm25_metadata = _load_bm25()
     if bm25 is not None and doc_ids:
         tokenized = masked_query.lower().split()
         bm25_scores = bm25.get_scores(tokenized)
@@ -147,7 +167,7 @@ async def run_doc_search(
     qdrant_score_map: dict[str, float] = {}
 
     try:
-        client = AsyncQdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
+        client = _get_qdrant_client()
 
         # Channel-based filter (RBAC): use allowed_channel_ids when set.
         # Falls back to team_id for legacy points that pre-date channel tagging.
@@ -224,7 +244,13 @@ async def run_doc_search(
             if doc_ids and doc_id in doc_ids:
                 idx = doc_ids.index(doc_id)
                 text = corpus[idx] if corpus else ""
-                payload = {"chunk_id": doc_id, "text": text, "source": "bm25", "source_type": "internal"}
+                meta = bm25_metadata[idx] if bm25_metadata else {}
+                payload = {
+                    "chunk_id": doc_id,
+                    "text": text,
+                    "source": meta.get("source") or meta.get("source_url") or "bm25",
+                    "source_type": meta.get("source_type", "internal"),
+                }
             else:
                 continue
         candidates.append({"id": doc_id, "payload": payload, "rrf_score": rrf_scores[doc_id]})

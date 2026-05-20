@@ -838,7 +838,8 @@ These are known failure modes that the Generator + Critic pipeline must explicit
 | Fallback Vector DB | ChromaDB | 0.5+ | For local dev only |
 | PII / NER | GLiNER `urchade/gliner_medium-v2.1` | Latest | Local, zero egress |
 | Doc parsing | Docling | Latest | PDF, HTML, markdown, code |
-| Orchestration | LangGraph | 0.2+ | Stateful, ReAct pattern |
+| Orchestration | LangGraph | 0.2+ | Stateful, ReAct pattern — planner routes across doc_search, ticket_lookup, live_docs, and sql_query |
+| NL-to-SQL | asyncpg 0.29+ | Latest | Direct PostgreSQL driver for sql_query agent |
 | Live fetch | Firecrawl SDK | Latest | JS-rendered docs |
 | Web search | Tavily Python | Latest | Fallback + multi-source |
 | Code parsing | tree-sitter | 0.21+ | AST-level diff |

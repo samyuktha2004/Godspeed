@@ -17,6 +17,7 @@ from src.jira_agent.router import router as jira_router
 from src.utils.middleware import RequestLoggingMiddleware
 from src.auth.router import router as auth_router
 from src.analytics.router import router as analytics_router
+from src.anomaly.router import router as anomaly_router
 from src.admin.router import router as admin_router
 from src.admin.users_api import router as admin_users_router
 from src.admin.users_api import audit_router as admin_audit_router
@@ -59,6 +60,7 @@ app.add_middleware(RequestLoggingMiddleware)
 # ---------------------------------------------------------------------------
 app.include_router(auth_router)
 app.include_router(analytics_router)
+app.include_router(anomaly_router)
 app.include_router(admin_router)
 app.include_router(admin_users_router)
 app.include_router(admin_audit_router)
@@ -75,25 +77,20 @@ app.include_router(tools_router)
 
 
 # ---------------------------------------------------------------------------
-# Health endpoint — pinged by admin dashboard + Docker healthcheck
+# Health endpoint — must be registered BEFORE the SPA catch-all
 # ---------------------------------------------------------------------------
 
 @app.get("/health", tags=["infra"])
 async def health() -> dict:
     import asyncio
-    from graph_store.config import settings as neo4j_settings
 
     results: dict = {"status": "ok", "neo4j": "unknown", "redis": "unknown", "qdrant": "unknown"}
 
-    # Neo4j
+    # Neo4j — reuse module-level singleton; do not close it here
     try:
-        from neo4j import AsyncGraphDatabase
-        driver = AsyncGraphDatabase.driver(
-            neo4j_settings.neo4j_uri,
-            auth=(neo4j_settings.neo4j_username, neo4j_settings.neo4j_password),
-        )
+        from graph_store.writer import get_driver
+        driver = get_driver()
         await asyncio.wait_for(driver.verify_connectivity(), timeout=3)
-        await driver.close()
         results["neo4j"] = "ok"
     except Exception as exc:
         results["neo4j"] = f"error: {exc}"
@@ -133,3 +130,22 @@ async def health() -> dict:
         results["status"] = "degraded"
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Serve React build — SPA catch-all MUST be last (catches everything else)
+# ---------------------------------------------------------------------------
+import os as _os
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse as _FileResponse
+
+_dist = _os.path.join(_os.path.dirname(__file__), "frontend", "dist")
+if _os.path.exists(_dist):
+    app.mount("/assets", StaticFiles(directory=_os.path.join(_dist, "assets")), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        file = _os.path.join(_dist, full_path)
+        if _os.path.isfile(file):
+            return _FileResponse(file)
+        return _FileResponse(_os.path.join(_dist, "index.html"))

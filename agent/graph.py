@@ -12,8 +12,11 @@ from agent.agents.guardrail import run_guardrail
 from agent.agents.planner import run_planner
 from agent.agents.synthesiser import stream_synthesis
 from agent.models import AgentResult, KnowledgeGraphState, RetrievedChunk
+from agent.tools.confluence_search import run_confluence_search
 from agent.tools.doc_search import compute_retrieval_confidence, run_doc_search
 from agent.tools.live_docs import run_live_docs
+from agent.tools.slack_search import run_slack_search
+from agent.tools.sql_query import run_sql_query
 from agent.tools.ticket_lookup import run_ticket_lookup
 
 logger = logging.getLogger(__name__)
@@ -100,6 +103,56 @@ async def ticket_lookup_node(state: KnowledgeGraphState) -> dict:
     return {"agent_results": {**state.agent_results, "ticket_lookup": result}}
 
 
+async def confluence_search_node(state: KnowledgeGraphState) -> dict:
+    queue = state.sse_queue
+    await _push_event(queue, "agent_started", {"agent": "confluence_search"})
+
+    task_input = _find_task_input(state, "confluence_search") or state.query_input.query
+    chunks: list[RetrievedChunk] = []
+    error: str | None = None
+
+    try:
+        chunks = await run_confluence_search(task_input, state.query_input.team_id)
+    except Exception as exc:
+        logger.exception("confluence_search_node error")
+        error = str(exc)
+
+    confidence = compute_retrieval_confidence(chunks)
+    result = AgentResult(
+        agent="confluence_search",
+        chunks=chunks,
+        retrieval_confidence=confidence,
+        error=error,
+    )
+    await _push_event(queue, "agent_done", {"agent": "confluence_search", "retrieval_confidence": confidence})
+    return {"agent_results": {**state.agent_results, "confluence_search": result}}
+
+
+async def slack_search_node(state: KnowledgeGraphState) -> dict:
+    queue = state.sse_queue
+    await _push_event(queue, "agent_started", {"agent": "slack_search"})
+
+    task_input = _find_task_input(state, "slack_search") or state.query_input.query
+    chunks: list[RetrievedChunk] = []
+    error: str | None = None
+
+    try:
+        chunks = await run_slack_search(task_input, state.query_input.team_id)
+    except Exception as exc:
+        logger.exception("slack_search_node error")
+        error = str(exc)
+
+    confidence = compute_retrieval_confidence(chunks)
+    result = AgentResult(
+        agent="slack_search",
+        chunks=chunks,
+        retrieval_confidence=confidence,
+        error=error,
+    )
+    await _push_event(queue, "agent_done", {"agent": "slack_search", "retrieval_confidence": confidence})
+    return {"agent_results": {**state.agent_results, "slack_search": result}}
+
+
 async def live_docs_node(state: KnowledgeGraphState) -> dict:
     queue = state.sse_queue
     await _push_event(queue, "agent_started", {"agent": "live_docs"})
@@ -127,6 +180,35 @@ async def live_docs_node(state: KnowledgeGraphState) -> dict:
         {"agent": "live_docs", "retrieval_confidence": confidence},
     )
     return {"agent_results": {**state.agent_results, "live_docs": result}}
+
+
+async def sql_query_node(state: KnowledgeGraphState) -> dict:
+    queue = state.sse_queue
+    await _push_event(queue, "agent_started", {"agent": "sql_query"})
+
+    task_input = _find_task_input(state, "sql_query") or state.query_input.query
+    chunks: list[RetrievedChunk] = []
+    error: str | None = None
+
+    try:
+        chunks = await run_sql_query(task_input, state.query_input.team_id)
+    except Exception as exc:
+        logger.exception("sql_query_node error")
+        error = str(exc)
+
+    confidence = compute_retrieval_confidence(chunks)
+    result = AgentResult(
+        agent="sql_query",
+        chunks=chunks,
+        retrieval_confidence=confidence,
+        error=error,
+    )
+    await _push_event(
+        queue,
+        "agent_done",
+        {"agent": "sql_query", "retrieval_confidence": confidence},
+    )
+    return {"agent_results": {**state.agent_results, "sql_query": result}}
 
 
 async def synthesiser_node(state: KnowledgeGraphState) -> dict:
@@ -216,7 +298,10 @@ def build_graph() -> Any:
     builder.add_node("planner_node", planner_node)
     builder.add_node("doc_search_node", doc_search_node)
     builder.add_node("ticket_lookup_node", ticket_lookup_node)
+    builder.add_node("confluence_search_node", confluence_search_node)
+    builder.add_node("slack_search_node", slack_search_node)
     builder.add_node("live_docs_node", live_docs_node)
+    builder.add_node("sql_query_node", sql_query_node)
     builder.add_node("join_node", join_node)
     builder.add_node("synthesiser_node", synthesiser_node)
     builder.add_node("guardrail_node", guardrail_node)
@@ -229,7 +314,10 @@ def build_graph() -> Any:
         {
             "doc_search_node": "doc_search_node",
             "ticket_lookup_node": "ticket_lookup_node",
+            "confluence_search_node": "confluence_search_node",
+            "slack_search_node": "slack_search_node",
             "live_docs_node": "live_docs_node",
+            "sql_query_node": "sql_query_node",
             "summariser_node": "synthesiser_node",
             "synthesiser_node": "synthesiser_node",
         },
@@ -239,7 +327,10 @@ def build_graph() -> Any:
     # incoming edge to fire before executing join_node (fan-in).
     builder.add_edge("doc_search_node", "join_node")
     builder.add_edge("ticket_lookup_node", "join_node")
+    builder.add_edge("confluence_search_node", "join_node")
+    builder.add_edge("slack_search_node", "join_node")
     builder.add_edge("live_docs_node", "join_node")
+    builder.add_edge("sql_query_node", "join_node")
 
     builder.add_edge("join_node", "synthesiser_node")
 

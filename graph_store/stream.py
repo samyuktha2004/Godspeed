@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from neo4j import AsyncGraphDatabase
@@ -10,6 +11,31 @@ from graph_store.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["graph"])
+
+# After a DNS/connection failure, skip Neo4j for this many seconds before retrying
+_NEO4J_COOLDOWN_S = 120
+_neo4j_failed_at: float | None = None
+
+
+def _neo4j_is_available() -> bool:
+    global _neo4j_failed_at
+    if _neo4j_failed_at is None:
+        return True
+    if time.monotonic() - _neo4j_failed_at > _NEO4J_COOLDOWN_S:
+        _neo4j_failed_at = None
+        return True
+    return False
+
+
+def _mark_neo4j_failed() -> None:
+    global _neo4j_failed_at
+    if _neo4j_failed_at is None:
+        logger.warning(
+            "graph_stream: Neo4j unreachable (%s) — graph panel disabled for %ds",
+            settings.neo4j_uri,
+            _NEO4J_COOLDOWN_S,
+        )
+    _neo4j_failed_at = time.monotonic()
 
 # ---------------------------------------------------------------------------
 # Cypher queries
@@ -126,15 +152,25 @@ async def graph_stream(websocket: WebSocket):
     else:
         logger.info("graph_stream: no channel restriction — serving full graph")
 
+    if not _neo4j_is_available():
+        try:
+            await websocket.send_json({"event": "error", "message": "Knowledge graph unavailable"})
+        except Exception:
+            pass
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
     driver = AsyncGraphDatabase.driver(
         settings.neo4j_uri,
         auth=(settings.neo4j_username, settings.neo4j_password),
         max_connection_lifetime=300,
-        connection_acquisition_timeout=60,
+        connection_acquisition_timeout=10,
         keep_alive=True,
     )
     try:
-        # Fetch all records at once (same pattern as traverse — avoids async-for issues)
         async with driver.session(database=settings.neo4j_database) as session:
             if use_filtered:
                 result = await session.run(
@@ -190,10 +226,10 @@ async def graph_stream(websocket: WebSocket):
 
     except WebSocketDisconnect:
         logger.info("graph_stream: client disconnected")
-    except Exception:
-        logger.exception("graph_stream: error")
+    except Exception as exc:
+        _mark_neo4j_failed()
         try:
-            await websocket.send_json({"event": "error", "message": "Graph stream failed"})
+            await websocket.send_json({"event": "error", "message": "Knowledge graph unavailable"})
         except Exception:
             pass
     finally:

@@ -3,11 +3,11 @@ interface Props {
 }
 
 const DEFAULTS = [
-  'What services does the auth team own?',
-  'Show me recent incidents affecting the payments service',
-  'Which libraries are deprecated in our stack?',
-  'What is the onboarding process for new engineers?',
-  'Summarise open Jira tickets for the infra team',
+  'What is Godspeed and what does it do?',
+  'How do I set up Godspeed locally?',
+  'What are the main components of the Godspeed architecture?',
+  'What API endpoints does Godspeed expose?',
+  'What is the incident runbook for Godspeed?',
 ]
 
 export function SuggestedTopics({ onSelect }: Props) {

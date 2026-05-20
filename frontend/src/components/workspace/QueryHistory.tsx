@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/http'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
@@ -25,17 +25,26 @@ async function fetchHistory(page: number): Promise<HistoryResponse> {
 
 interface Props {
   onReplay?: (query: string) => void
+  focusId?:  string
 }
 
-export function QueryHistory({ onReplay }: Props) {
+export function QueryHistory({ onReplay, focusId }: Props) {
   const [page,     setPage]     = useState(1)
-  const [expanded, setExpanded] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<string | null>(focusId ?? null)
+  const focusRef = useRef<HTMLDivElement>(null)
 
   const { data, isLoading } = useQuery({
     queryKey:  ['workspace-history', page],
     queryFn:   () => fetchHistory(page),
     staleTime: 60_000,
   })
+
+  // Scroll the focused item into view once data loads
+  useEffect(() => {
+    if (focusId && focusRef.current) {
+      focusRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [focusId, data])
 
   const totalPages = data ? Math.ceil(data.total / 20) : 1
 
@@ -61,7 +70,11 @@ export function QueryHistory({ onReplay }: Props) {
           {(data?.items ?? []).map((item) => (
             <div
               key={item.id}
-              className="rounded-xl border border-surface-subtle transition-colors hover:border-stone-300 dark:hover:border-stone-600"
+              ref={item.id === focusId ? focusRef : undefined}
+              className={cn(
+                'rounded-xl border border-surface-subtle transition-colors hover:border-stone-300 dark:hover:border-stone-600',
+                item.id === focusId && 'border-brand/50 dark:border-brand/40',
+              )}
             >
               <button
                 className="flex w-full items-start gap-3 p-4 text-left"

@@ -15,7 +15,7 @@ def confluence_process_page(self, page_id: str, space_key: str = "", team_id: st
     """Webhook-triggered single-page ingestion."""
     try:
         from src.confluence_agent.pipeline import ingest_page
-        count = asyncio.get_event_loop().run_until_complete(
+        count = asyncio.run(
             ingest_page(page_id, space_key, team_id or confluence_config.team_id)
         )
         return {"page_id": page_id, "chunks_stored": count}
@@ -29,7 +29,7 @@ def confluence_sync_space(self, space_key: str, team_id: str = "") -> dict:
     """Full space sync."""
     try:
         from src.confluence_agent.pipeline import ingest_space
-        count = asyncio.get_event_loop().run_until_complete(
+        count = asyncio.run(
             ingest_space(space_key, team_id or confluence_config.team_id)
         )
         return {"space_key": space_key, "chunks_stored": count}
@@ -65,6 +65,6 @@ def confluence_periodic_sync() -> dict:
             results[space_key] = len(docs)
         return total
 
-    total = asyncio.get_event_loop().run_until_complete(_sync_all())
+    total = asyncio.run(_sync_all())
     logger.info("confluence_periodic_sync: synced %d pages, %d total chunks", sum(results.values()), total)
     return {"spaces": results, "total_chunks": total}

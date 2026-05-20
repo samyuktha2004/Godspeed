@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useSearch } from '@tanstack/react-router'
+import { useSearch, useNavigate } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/authStore'
 import { useUIStore } from '@/stores/uiStore'
 import { useSSEStream } from '@/hooks/useSSEStream'
@@ -27,13 +27,28 @@ import type {
 
 type Tab = 'graph' | 'answer'
 
+const QR_PREFIX = 'gs_qr_'
+
+interface Exchange {
+  id: string
+  query: string
+  answer: string
+  citations: RetrievedChunk[]
+  plan: AgentTask[]
+}
+
 export function ResultsPage() {
   const user       = useAuthStore((s) => s.user)
+  const navigate   = useNavigate()
   const { graphCollapsed, toggleGraphCollapsed } = useUIStore()
   const sessionRef = useRef(crypto.randomUUID())
-  const { q: initialQuery } = useSearch({ from: '/query' })
+  const savedRef   = useRef(false)
+  const { q: initialQuery, qid: initialQid, fresh: forceRun } = useSearch({ from: '/query' })
 
-  // ── SSE state ───────────────────────────────────────────────────────────────
+  // ── Conversation history ─────────────────────────────────────────────────────
+  const [exchanges, setExchanges] = useState<Exchange[]>([])
+
+  // ── SSE state (current streaming exchange) ───────────────────────────────────
   const [plan, setPlan]               = useState<AgentTask[]>([])
   const [agentStatuses, setStatuses]  = useState<Record<string, AgentStatus>>({})
   const [answerText, setAnswerText]   = useState('')
@@ -43,28 +58,39 @@ export function ResultsPage() {
   const [queryId, setQueryId]           = useState('')
   const [shareOpen, setShareOpen]       = useState(false)
 
+  // Refs to read current values inside the completion effect without stale closure
+  const answerTextRef  = useRef('')
+  const citationsRef   = useRef<RetrievedChunk[]>([])
+  const planRef        = useRef<AgentTask[]>([])
+  const currentQueryRef = useRef('')
+
+  // Keep refs in sync
+  useEffect(() => { answerTextRef.current  = answerText  }, [answerText])
+  useEffect(() => { citationsRef.current   = citations   }, [citations])
+  useEffect(() => { planRef.current        = plan        }, [plan])
+  useEffect(() => { currentQueryRef.current = currentQuery }, [currentQuery])
+
   // ── Graph state ─────────────────────────────────────────────────────────────
   const [graphNodes, setGraphNodes]     = useState<GraphNode[]>([])
   const [graphEdges, setGraphEdges]     = useState<GraphEdge[]>([])
   const [hoveredNode, setHoveredNode]   = useState<GraphNode | null>(null)
   const [hoverPos, setHoverPos]         = useState({ x: 0, y: 0 })
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
-  // Accumulated in refs to avoid setState on every 50ms node message
   const nodesAccRef = useRef<GraphNode[]>([])
   const edgesAccRef = useRef<GraphEdge[]>([])
 
   // ── Mobile tab ──────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab]       = useState<Tab>('graph')
-  // Local — not persisted; maximize is a session-level power-user action
   const [graphMaximized, setGraphMaximized] = useState(false)
 
   // ── Hooks ───────────────────────────────────────────────────────────────────
   const { state, error, firstEventArrived, stream } = useSSEStream()
   const { gState, retryCount, connect, disconnect } = useGraphStream()
 
-  // ── Shared graph reconnect ───────────────────────────────────────────────────
-  // Used both by runQuery (new query) and the standalone "Reload / Try again" buttons.
-  // Clears accumulated state then opens a fresh WS to /graph/stream.
+  useEffect(() => {
+    if (gState === 'error' && !graphCollapsed) toggleGraphCollapsed()
+  }, [gState]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const reconnectGraph = useCallback(() => {
     nodesAccRef.current = []
     edgesAccRef.current = []
@@ -88,7 +114,21 @@ export function ResultsPage() {
   // ── Query runner ─────────────────────────────────────────────────────────────
   const runQuery = useCallback(
     async (query: string) => {
-      // Reset all state for the new query
+      // Save the current completed exchange to history before resetting
+      if (answerTextRef.current && currentQueryRef.current) {
+        setExchanges((prev) => [
+          ...prev,
+          {
+            id:        crypto.randomUUID(),
+            query:     currentQueryRef.current,
+            answer:    answerTextRef.current,
+            citations: citationsRef.current,
+            plan:      planRef.current,
+          },
+        ])
+      }
+
+      savedRef.current = false
       setPlan([])
       setStatuses({})
       setAnswerText('')
@@ -97,7 +137,7 @@ export function ResultsPage() {
       setCurrentQuery(query)
       setQueryId(crypto.randomUUID())
       setShareOpen(false)
-      setActiveTab('graph') // always start on graph tab so user sees it populate
+      setActiveTab('graph')
       setSelectedNode(null)
 
       reconnectGraph()
@@ -153,13 +193,65 @@ export function ResultsPage() {
     setSelectedNode(node)
   }, [])
 
-  // Auto-fire from URL ?q= on mount
   const runQueryRef = useRef(runQuery)
   runQueryRef.current = runQuery
+  const textKey = (q: string) => QR_PREFIX + 'q:' + q
+
+  const restoreFromCache = (raw: string): boolean => {
+    try {
+      const { query, answer, citations: cc } = JSON.parse(raw)
+      setCurrentQuery(query)
+      setAnswerText(answer)
+      setCitations(cc ?? [])
+      savedRef.current = true
+      return true
+    } catch { return false }
+  }
+
+  const lastParamKeyRef = useRef('')
+
   useEffect(() => {
+    const paramKey = `${initialQid ?? ''}|${initialQuery ?? ''}|${String(forceRun)}`
+    if (lastParamKeyRef.current === paramKey) return
+    lastParamKeyRef.current = paramKey
+
+    if (!forceRun) {
+      if (initialQid) {
+        try {
+          const raw = sessionStorage.getItem(QR_PREFIX + initialQid)
+          if (raw && restoreFromCache(raw)) return
+        } catch { /* ignore */ }
+      }
+      if (initialQuery) {
+        try {
+          const raw = sessionStorage.getItem(textKey(initialQuery))
+          if (raw && restoreFromCache(raw)) return
+        } catch { /* ignore */ }
+      }
+    }
     if (initialQuery) runQueryRef.current(initialQuery)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [initialQuery, initialQid, forceRun])
+
+  // Cache completed result and update URL to ?qid=
+  useEffect(() => {
+    if (state !== 'complete' || !currentQuery || !answerText || savedRef.current) return
+    savedRef.current = true
+    const qid = sessionRef.current
+    const payload = JSON.stringify({ query: currentQuery, answer: answerText, citations })
+    try {
+      sessionStorage.setItem(QR_PREFIX + qid, payload)
+      sessionStorage.setItem(textKey(currentQuery), payload)
+    } catch { /* storage full */ }
+    navigate({ to: '/query', search: { qid, q: undefined, fresh: false }, replace: true })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state])
+
+  // Scroll to bottom when new exchange added or answer streams in
+  const bottomRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [exchanges.length, answerText])
 
   // ── Derived ─────────────────────────────────────────────────────────────────
   const isLoading   = state === 'loading'
@@ -167,36 +259,34 @@ export function ResultsPage() {
   const isComplete  = state === 'complete'
   const isError     = state === 'error'
   const isActive    = isLoading || isStreaming
-  const hasData     = firstEventArrived.current  // set when first SSE event arrives
+  const hasData     = firstEventArrived.current
 
-  // ── Tab indicators ──────────────────────────────────────────────────────────
   const graphHasContent  = graphNodes.length > 0
   const answerHasContent = !!answerText || plan.length > 0
 
   return (
     <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-4 py-8">
 
-      {/* Search bar — always visible */}
+      {/* Search bar */}
       <SearchBox
+        key={currentQuery || initialQuery}
         onSubmit={runQuery}
         disabled={isActive}
-        defaultValue={initialQuery ?? ''}
+        defaultValue={currentQuery || (initialQuery ?? '')}
       />
 
-      {/* Idle home state — no query yet */}
-      {state === 'idle' && !currentQuery && (
+      {/* Idle home state */}
+      {state === 'idle' && !currentQuery && exchanges.length === 0 && (
         <div className="flex flex-1 items-center justify-center">
           <p className="text-sm text-stone-400">Ask a question to get started.</p>
         </div>
       )}
 
-      {/* ── Results layout — mounted immediately when query fires ─────────── */}
-      {currentQuery && (
+      {/* ── Results layout ─────────────────────────────────────────────────── */}
+      {(currentQuery || exchanges.length > 0) && (
         <>
-          {/* Mobile tab bar — hidden on lg where both columns are visible */}
-          {/* Answer tab is disabled (grey) until first SSE event arrives */}
+          {/* Mobile tab bar */}
           <div className="flex rounded-xl border border-surface-subtle bg-stone-50 p-1 dark:bg-stone-800/50 lg:hidden">
-            {/* Graph tab — always accessible; shows animation even before nodes arrive */}
             <button
               onClick={() => setActiveTab('graph')}
               className={cn(
@@ -213,14 +303,12 @@ export function ResultsPage() {
                 </span>
               )}
             </button>
-
-            {/* Answer tab — disabled (grey, not clickable) until first SSE event */}
             <button
               onClick={() => setActiveTab('answer')}
-              disabled={!hasData}
+              disabled={!hasData && exchanges.length === 0}
               className={cn(
                 'flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-sm font-medium transition-colors',
-                !hasData
+                !hasData && exchanges.length === 0
                   ? 'cursor-not-allowed text-stone-300 dark:text-stone-600'
                   : activeTab === 'answer'
                   ? 'bg-white text-stone-900 shadow-sm dark:bg-stone-700 dark:text-stone-100'
@@ -228,26 +316,23 @@ export function ResultsPage() {
               )}
             >
               Answer
-              {/* Pulsing dot only once answer has data and is still streaming */}
               {hasData && isActive && answerHasContent && (
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand" />
               )}
             </button>
           </div>
 
-          {/* Two-column grid — collapses to single when graph is hidden */}
+          {/* Two-column grid */}
           <div className={cn(
             'flex flex-col gap-6 lg:grid lg:items-start lg:gap-8',
             graphCollapsed ? 'lg:grid-cols-1' : 'lg:grid-cols-[1fr_380px]',
           )}>
 
-            {/* ── Left: answer column ──────────────────────────────────────── */}
+            {/* ── Left: conversation column ─────────────────────────────────── */}
             <div className={cn(
-              'flex flex-col gap-6',
+              'flex flex-col gap-8',
               activeTab === 'graph' && 'hidden lg:flex',
             )}>
-
-              {/* Show-graph chip — visible on desktop when graph panel is collapsed */}
               {graphCollapsed && (
                 <button
                   onClick={toggleGraphCollapsed}
@@ -257,88 +342,98 @@ export function ResultsPage() {
                 </button>
               )}
 
-              {/* Thinking indicator — before any SSE event arrives */}
-              {isActive && !hasData && (
-                <div className="flex items-center gap-2 text-sm text-stone-400">
-                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-stone-200 border-t-stone-500" />
-                  Thinking…
+              {/* ── Completed past exchanges ─────────────────────────────── */}
+              {exchanges.map((ex) => (
+                <div key={ex.id} className="flex flex-col gap-4 border-b border-surface-subtle pb-8">
+                  <p className="text-sm font-semibold text-stone-500">{ex.query}</p>
+                  <Answer text={ex.answer} />
+                  {ex.citations.length > 0 && <Citations chunks={ex.citations} />}
+                </div>
+              ))}
+
+              {/* ── Current streaming exchange ────────────────────────────── */}
+              {currentQuery && (
+                <div className="flex flex-col gap-4">
+                  {/* Show query heading only when there are prior exchanges */}
+                  {exchanges.length > 0 && (
+                    <p className="text-sm font-semibold text-stone-700 dark:text-stone-300">
+                      {currentQuery}
+                    </p>
+                  )}
+
+                  {isActive && !hasData && (
+                    <div className="flex items-center gap-2 text-sm text-stone-400">
+                      <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-stone-200 border-t-stone-500" />
+                      Thinking…
+                    </div>
+                  )}
+
+                  {plan.length > 0 && (
+                    <AgentBadges plan={plan} statuses={agentStatuses} />
+                  )}
+
+                  {answerText && <Answer text={answerText} />}
+
+                  {isComplete && !answerText && citations.length === 0 && (
+                    <NoResultsState query={currentQuery} />
+                  )}
+
+                  {guardrail?.escalate && <HallucinationWarning />}
+
+                  {isError && !answerText && (
+                    <TimeoutError
+                      message={error ?? undefined}
+                      onRetry={() => runQuery(currentQuery)}
+                    />
+                  )}
+
+                  {isError && answerText && error?.includes('incomplete') && (
+                    <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                      <span aria-hidden>⚠</span>
+                      Answer may be incomplete — connection dropped mid-stream.
+                      <button onClick={() => runQuery(currentQuery)} className="ml-auto shrink-0 underline">
+                        Retry
+                      </button>
+                    </div>
+                  )}
+
+                  {citations.length > 0 && <Citations chunks={citations} />}
+
+                  {isComplete && citations.length > 3 && (
+                    <RelatedDocs chunks={citations.slice(3)} />
+                  )}
+
+                  {isComplete && (
+                    <div className="flex items-center justify-between gap-4">
+                      <QueryFeedback queryId={queryId} />
+                      <button
+                        onClick={() => setShareOpen(true)}
+                        className="shrink-0 text-xs text-stone-400 underline hover:text-stone-600"
+                      >
+                        Share
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Agent progress badges */}
-              {plan.length > 0 && (
-                <AgentBadges plan={plan} statuses={agentStatuses} />
+              <div ref={bottomRef} />
+
+              {/* Follow-up always visible at bottom once there's any content */}
+              {(isComplete || exchanges.length > 0) && (
+                <FollowUp onSubmit={runQuery} disabled={isActive} />
               )}
-
-              {/* Streaming answer */}
-              {answerText && <Answer text={answerText} />}
-
-              {/* Complete with no answer */}
-              {isComplete && !answerText && <NoResultsState query={currentQuery} />}
-
-              {/* Guardrail escalation */}
-              {guardrail?.escalate && <HallucinationWarning />}
-
-              {/* Hard error — no answer at all */}
-              {isError && !answerText && (
-                <TimeoutError
-                  message={error ?? undefined}
-                  onRetry={() => runQuery(currentQuery)}
-                />
-              )}
-
-              {/* Soft error — answer cut short mid-stream */}
-              {isError && answerText && error?.includes('incomplete') && (
-                <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-                  <span aria-hidden>⚠</span>
-                  Answer may be incomplete — connection dropped mid-stream.
-                  <button
-                    onClick={() => runQuery(currentQuery)}
-                    className="ml-auto shrink-0 underline"
-                  >
-                    Retry
-                  </button>
-                </div>
-              )}
-
-              {/* Citations */}
-              {citations.length > 0 && <Citations chunks={citations} />}
-
-              {/* Related docs (overflow citations) */}
-              {isComplete && citations.length > 3 && (
-                <RelatedDocs chunks={citations.slice(3)} />
-              )}
-
-              {/* Footer actions */}
-              {isComplete && (
-                <div className="flex items-center justify-between gap-4">
-                  <QueryFeedback queryId={queryId} />
-                  <button
-                    onClick={() => setShareOpen(true)}
-                    className="shrink-0 text-xs text-stone-400 underline hover:text-stone-600"
-                  >
-                    Share
-                  </button>
-                </div>
-              )}
-
-              {isComplete && <FollowUp onSubmit={runQuery} />}
             </div>
 
             {/* ── Right: graph panel ───────────────────────────────────────── */}
-            {/* On mobile: controlled by activeTab. On desktop: hidden when graphCollapsed */}
             <div className={cn(
               'flex flex-col overflow-hidden rounded-xl border border-surface-subtle',
-              // Mobile: toggle by tab; desktop: toggle by collapsed state
               activeTab === 'answer' ? 'hidden lg:flex' : 'flex',
               graphCollapsed && 'lg:hidden',
-              // Maximized: fixed fullscreen overlay
               graphMaximized
                 ? 'fixed inset-0 z-50 rounded-none border-0 bg-white dark:bg-stone-950'
                 : 'h-[440px]',
             )}>
-
-              {/* Graph toolbar */}
               <div className="flex shrink-0 items-center gap-2 border-b border-surface-subtle px-3 py-2">
                 <span className="flex-1 text-xs font-semibold uppercase tracking-wide text-stone-400">
                   Knowledge Graph
@@ -348,7 +443,6 @@ export function ResultsPage() {
                     {graphNodes.length} nodes · {graphEdges.length} edges
                   </span>
                 )}
-                {/* Maximize / restore */}
                 <button
                   onClick={() => setGraphMaximized((m) => !m)}
                   title={graphMaximized ? 'Exit fullscreen' : 'Fullscreen'}
@@ -357,7 +451,6 @@ export function ResultsPage() {
                 >
                   {graphMaximized ? '⤡' : '⤢'}
                 </button>
-                {/* Collapse — desktop only; on mobile graph visibility is via tabs */}
                 <button
                   onClick={toggleGraphCollapsed}
                   title="Collapse graph"
@@ -368,7 +461,6 @@ export function ResultsPage() {
                 </button>
               </div>
 
-              {/* Canvas — flex-1 fills remaining panel height */}
               <KnowledgeGraph
                 nodes={graphNodes}
                 edges={graphEdges}
@@ -378,7 +470,6 @@ export function ResultsPage() {
                 className="flex-1"
               />
 
-              {/* Graph footer */}
               <div className="flex shrink-0 items-center gap-2 border-t border-surface-subtle px-3 py-2">
                 {gState === 'done' && (
                   <button
@@ -392,7 +483,6 @@ export function ResultsPage() {
                 {gState === 'retrying' && <NetworkRetry attempt={retryCount + 1} />}
               </div>
 
-              {/* Max-retries error bar */}
               {gState === 'error' && (
                 <div className="flex shrink-0 items-center justify-between border-t border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-700 dark:bg-stone-800/40">
                   <span className="text-stone-500 dark:text-stone-400">
@@ -411,17 +501,14 @@ export function ResultsPage() {
         </>
       )}
 
-      {/* Tooltip — document-level fixed positioning */}
       <GraphNodeTooltip node={hoveredNode} x={hoverPos.x} y={hoverPos.y} />
 
-      {/* Share modal */}
       <ShareResults
         query={currentQuery}
         open={shareOpen}
         onClose={() => setShareOpen(false)}
       />
 
-      {/* Node detail slide-in panel */}
       <GraphNodeDetailPanel
         node={selectedNode}
         teamId={user?.team_id ?? 'default'}

@@ -14,7 +14,7 @@ def jira_process_issue(self, issue_key: str, team_id: str = "") -> dict:
     """Webhook-triggered single-issue ingestion."""
     try:
         from src.jira_agent.pipeline import ingest_issue
-        count = asyncio.get_event_loop().run_until_complete(
+        count = asyncio.run(
             ingest_issue(issue_key, team_id or jira_config.team_id)
         )
         return {"issue_key": issue_key, "chunks_stored": count}
@@ -28,7 +28,7 @@ def jira_sync_project(self, project_key: str, team_id: str = "") -> dict:
     """Full project sync — intended for manual trigger or scheduled use."""
     try:
         from src.jira_agent.pipeline import ingest_project
-        count = asyncio.get_event_loop().run_until_complete(
+        count = asyncio.run(
             ingest_project(project_key, team_id or jira_config.team_id)
         )
         return {"project_key": project_key, "chunks_stored": count}

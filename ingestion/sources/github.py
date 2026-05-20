@@ -37,7 +37,7 @@ class GithubSource(BaseSource):
         self._team_id = team_id
         self._repo_url = repo_url
         self._supabase = supabase_client
-        self._path_filter = path_filter or settings.github_path_filter
+        self._path_filter = path_filter  # empty string = no filter; caller sets explicitly
         self._branch = branch or settings.github_branch
         self._token = token or settings.github_token
         self._owner, self._repo = _parse_owner_repo(repo_url)
@@ -125,12 +125,15 @@ class GithubSource(BaseSource):
             logger.exception("github: failed to fetch file tree")
             return []
 
+        INDEXABLE_EXTENSIONS = {".md", ".txt", ".rst", ".py", ".ts", ".tsx", ".js", ".yaml", ".yml"}
+
         md_paths = [
             item["path"]
             for item in tree
             if item["type"] == "blob"
-            and item["path"].endswith(".md")
-            and item["path"].startswith(self._path_filter)
+            and any(item["path"].endswith(ext) for ext in INDEXABLE_EXTENSIONS)
+            and (not self._path_filter or item["path"].startswith(self._path_filter))
+            and item.get("size", 0) <= 200_000
         ]
 
         docs: list[RawDocument] = []
@@ -151,7 +154,7 @@ class GithubSource(BaseSource):
             source_url = data.get("html_url", f"{self._repo_url}/blob/{self._branch}/{path}")
             return RawDocument(
                 doc_id=doc_id,
-                title=path.split("/")[-1].removesuffix(".md"),
+                title=path.split("/")[-1].rsplit(".", 1)[0],
                 content=content,
                 source_url=source_url,
                 source_type="github",

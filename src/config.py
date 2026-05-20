@@ -106,6 +106,8 @@ class Settings(BaseSettings):
     admin_password: str = Field(default="admin")
     # Set True when running behind HTTPS so session cookies are Secure
     cookie_secure: bool = Field(default=False)
+    # SameSite=none required when app is embedded in an iframe on a different domain (e.g. HF Spaces)
+    cookie_samesite: str = Field(default="lax")
 
     # Google OAuth2 / SSO
     google_oauth_client_id:     str = Field(default="")
