@@ -10,11 +10,19 @@ from urllib.parse import urlparse
 
 import aiohttp
 from bs4 import BeautifulSoup
-from docling import DocumentConverter
 
 from src.config import settings
 
 logger = logging.getLogger(__name__)
+
+try:
+    from docling import DocumentConverter
+except ImportError:
+    DocumentConverter = None
+    logger.warning(
+        "docling not installed; PDF extraction in web_scraper will return a placeholder. "
+        "Install docling (in requirements.txt) for full PDF support."
+    )
 
 
 @dataclass
@@ -175,6 +183,8 @@ class WebScraperAdapter:
 
     async def _extract_pdf_text(self, content: bytes) -> str:
         """Extract text from PDF using docling."""
+        if DocumentConverter is None:
+            return "[PDF content could not be extracted: docling not installed]"
         try:
             converter = DocumentConverter()
             # Save to temp file for docling

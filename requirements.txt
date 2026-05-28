@@ -153,4 +153,4 @@ Pillow==12.2.0
 bcrypt==5.0.0
 
 # ── NL-to-SQL agent — direct PostgreSQL connection ────────────────────────────
-asyncpg>=0.29.0
+asyncpg==0.30.0
