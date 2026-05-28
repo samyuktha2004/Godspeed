@@ -5,9 +5,9 @@ import logging
 import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from neo4j import AsyncGraphDatabase
 
 from graph_store.config import settings
+from graph_store.writer import get_driver
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["graph"])
@@ -163,13 +163,9 @@ async def graph_stream(websocket: WebSocket):
             pass
         return
 
-    driver = AsyncGraphDatabase.driver(
-        settings.neo4j_uri,
-        auth=(settings.neo4j_username, settings.neo4j_password),
-        max_connection_lifetime=300,
-        connection_acquisition_timeout=10,
-        keep_alive=True,
-    )
+    # Reuse the shared driver — per-request driver instantiation was leaking
+    # connection pools and the close-in-finally could hang on client disconnect.
+    driver = get_driver()
     try:
         async with driver.session(database=settings.neo4j_database) as session:
             if use_filtered:
@@ -233,10 +229,7 @@ async def graph_stream(websocket: WebSocket):
         except Exception:
             pass
     finally:
-        try:
-            await driver.close()
-        except Exception:
-            pass
+        # Driver is shared (graph_store.writer.get_driver) — do NOT close per request.
         try:
             await websocket.close()
         except Exception:

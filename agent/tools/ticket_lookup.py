@@ -12,10 +12,10 @@ logger = logging.getLogger(__name__)
 
 async def run_ticket_lookup(query: str, team_id: str) -> list[RetrievedChunk]:
     """Search Qdrant for Jira chunks matching the query."""
-    from qdrant_client import AsyncQdrantClient
     from qdrant_client.http import models as qmodels
-    from agent.tools.doc_search import _get_embedding_model
+    from agent.tools.doc_search import _get_embedding_model, _get_qdrant_client
 
+    client = None
     try:
         model = _get_embedding_model()
         output = model.encode(
@@ -28,7 +28,6 @@ async def run_ticket_lookup(query: str, team_id: str) -> list[RetrievedChunk]:
         )
         dense_vector = output["dense_vecs"][0].tolist()
 
-        from agent.tools.doc_search import _get_qdrant_client
         client = _get_qdrant_client()
 
         jira_filter = qmodels.Filter(
@@ -65,3 +64,5 @@ async def run_ticket_lookup(query: str, team_id: str) -> list[RetrievedChunk]:
     except Exception:
         logger.exception("ticket_lookup: search failed")
         return []
+    # NOTE: do not close `client` — it is the shared singleton from
+    # src.utils.clients; its lifetime is owned by the FastAPI lifespan hook.

@@ -33,10 +33,13 @@ async def _store_query_event(
     escalated: bool = False,
     answer_text: str = "",
 ) -> None:
-    """Persist query event to Redis for analytics and workspace history."""
+    """Persist query event to Redis for analytics and workspace history.
+
+    Pipelined into a single roundtrip; intended to be invoked via
+    ``asyncio.create_task`` so it never blocks the SSE close.
+    """
     try:
-        import redis.asyncio as aioredis
-        from src.config import settings
+        from src.utils.clients import get_redis
 
         brief = answer_text[:500].rstrip() if answer_text else ""
         if answer_text and len(answer_text) > 500:
@@ -63,43 +66,57 @@ async def _store_query_event(
             "escalated":       escalated,
         }
 
-        r = aioredis.from_url(settings.redis_url, decode_responses=True)
+        topic_words = [
+            w for w in query_input.query.lower().split()
+            if len(w) > 4 and w.isalpha()
+        ]
+
+        escalation = None
+        if escalated:
+            escalation = {
+                "id":              event["id"],
+                "query":           query_input.query,
+                "frequency":       1,
+                "last_seen":       event["created_at"],
+                "teams":           [query_input.team_id],
+                "status":          "open",
+                "gap_type":        "missing_knowledge",
+                "guardrail_score": guardrail_score,
+            }
+
+        r = await get_redis()
+
+        # Pipeline all Redis writes into one roundtrip — turns ~6 RTTs into 1.
+        async with r.pipeline(transaction=False) as pipe:
+            pipe.lpush(HISTORY_KEY, json.dumps(event))
+            pipe.ltrim(HISTORY_KEY, 0, 999)
+            for word in topic_words:
+                pipe.zincrby(TOPICS_KEY, 1, word)
+            if escalation is not None:
+                pipe.lpush("gs:escalations", json.dumps(escalation))
+                pipe.ltrim("gs:escalations", 0, 499)
+            await pipe.execute()
+
+        # Persist to Supabase for time-series anomaly detection.
+        # Fire-and-forget: never allowed to fail the SSE stream.
         try:
-            # Push to history list (newest first), keep last 1000
-            await r.lpush(HISTORY_KEY, json.dumps(event))
-            await r.ltrim(HISTORY_KEY, 0, 999)
+            from src.anomaly.db import async_upsert_query_event
 
-            # Track topic words (naive: split query into words, skip short ones)
-            for word in query_input.query.lower().split():
-                if len(word) > 4 and word.isalpha():
-                    await r.zincrby(TOPICS_KEY, 1, word)
+            async def _safe_upsert() -> None:
+                try:
+                    await asyncio.wait_for(async_upsert_query_event(event), timeout=5)
+                except asyncio.TimeoutError:
+                    logger.warning("anomaly_upsert_timeout", extra={"event_id": event.get("id")})
+                except Exception as exc:  # noqa: BLE001 — analytics writes must not raise
+                    logger.warning(
+                        "anomaly_upsert_failed",
+                        extra={"event_id": event.get("id"), "error": str(exc)},
+                    )
 
-            # Write escalation record when the guardrail flagged the answer
-            if escalated:
-                escalation = {
-                    "id":              event["id"],
-                    "query":           query_input.query,
-                    "frequency":       1,
-                    "last_seen":       event["created_at"],
-                    "teams":           [query_input.team_id],
-                    "status":          "open",
-                    "gap_type":        "missing_knowledge",
-                    "guardrail_score": guardrail_score,
-                }
-                await r.lpush("gs:escalations", json.dumps(escalation))
-                await r.ltrim("gs:escalations", 0, 499)
+            asyncio.create_task(_safe_upsert())
+        except Exception as exc:
+            logger.warning("anomaly_upsert_dispatch_failed", extra={"error": str(exc)})
 
-            # Persist to Supabase for time-series anomaly detection.
-            # Fire-and-forget: never allowed to fail the SSE stream.
-            try:
-                import asyncio as _asyncio
-                from src.anomaly.db import async_upsert_query_event
-                _asyncio.ensure_future(async_upsert_query_event(event))
-            except Exception:
-                pass
-
-        finally:
-            await r.aclose()
     except Exception as exc:
         logger.warning("query_store_failed", extra={"error": str(exc)})
 
@@ -115,29 +132,36 @@ async def _event_generator(
             query_input=query_input,
             sse_queue=queue,
         )
+        success = False
+        final_state: dict = {}
         with Timer() as t:
             try:
                 final_state = await graph.ainvoke(initial_state)
+                success = True
                 logger.info(
                     "query_complete",
                     extra={"session_id": query_input.session_id, "duration_ms": t.ms},
-                )
-                await _store_query_event(
-                    query_input, t.ms, success=True,
-                    agent_results=final_state.get("agent_results", {}),
-                    guardrail_score=final_state.get("guardrail_score"),
-                    escalated=final_state.get("escalate", False),
-                    answer_text=final_state.get("final_answer") or "",
                 )
             except Exception as exc:
                 logger.exception(
                     "query_error",
                     extra={"session_id": query_input.session_id, "duration_ms": t.ms, "error": str(exc)},
                 )
-                await _store_query_event(query_input, t.ms, success=False)
                 await queue.put({"event": "error", "data": {"message": str(exc)}})
             finally:
+                # Close the SSE stream the moment the graph is done — analytics
+                # writes run out-of-band so the client never waits on Redis.
                 await queue.put(_SENTINEL)
+
+        asyncio.create_task(
+            _store_query_event(
+                query_input, t.ms, success=success,
+                agent_results=final_state.get("agent_results", {}) if success else {},
+                guardrail_score=final_state.get("guardrail_score") if success else None,
+                escalated=final_state.get("escalate", False) if success else False,
+                answer_text=(final_state.get("final_answer") or "") if success else "",
+            )
+        )
 
     task = asyncio.create_task(run_graph())
 

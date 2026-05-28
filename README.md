@@ -49,7 +49,11 @@ SUPABASE_URL=            # your Supabase project URL
 SUPABASE_KEY=            # service-role key (not anon) for backend writes
 REDIS_URL=redis://localhost:6379/0
 QDRANT_HOST=localhost
+ALLOW_DEMO_AUTH=true     # enables demo/admin fallback login in local dev (default off)
 ```
+
+> **Note:** `ALLOW_DEMO_AUTH` defaults to `false` so production deploys fail closed
+> if Supabase is unreachable. Set it to `true` only for local dev.
 
 For the frontend:
 
@@ -222,8 +226,8 @@ Godspeed/
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `GOOGLE_API_KEY` | — | Gemini API — all LLM calls |
-| `PLANNER_MODEL` | `gemini-2.5-pro` | Query planning agent |
-| `SYNTHESISER_MODEL` | `gemini-2.5-pro` | Answer synthesis |
+| `PLANNER_MODEL` | `gemini-2.5-flash` | Query planning agent — switch to `gemini-2.5-pro` for deeper reasoning at 5–10× latency |
+| `SYNTHESISER_MODEL` | `gemini-2.5-flash` | Answer synthesis — same trade-off as planner |
 | `SUMMARISER_MODEL` | `gemini-2.5-flash` | Document summarisation |
 | `GUARDRAIL_MODEL` | `gemini-2.5-flash` | Output safety check |
 | `GRAPH_EXTRACTION_MODEL` | `gemini-2.5-flash` | Neo4j entity extraction |
@@ -232,6 +236,9 @@ Godspeed/
 | `REDIS_URL` | `redis://localhost:6379/0` | Celery broker + cache |
 | `SUPABASE_URL` | — | Metadata storage |
 | `TEAM_ID` | `default` | RBAC team scope |
+| `ALLOW_DEMO_AUTH` | `false` | Enable demo/admin hardcoded login fallback (local dev only) |
+| `COOKIE_SAMESITE` | `lax` | Session cookie SameSite — set `none` only when frontend is on a cross-site iframe (e.g. HF Spaces) |
+| `COOKIE_SECURE` | `false` | Set `true` when serving over HTTPS in production |
 
 Full variable list: [`.env.example`](.env.example)
 

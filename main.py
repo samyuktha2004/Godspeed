@@ -3,7 +3,7 @@ load_dotenv()
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent.api import router as agent_router
@@ -14,7 +14,7 @@ from src.confluence_agent.router import router as confluence_router
 from toolsforgitnotionslack.router import router as tools_router
 from src.file_agent.router import router as file_router
 from src.jira_agent.router import router as jira_router
-from src.utils.middleware import RequestLoggingMiddleware
+from src.utils.middleware import OriginCheckMiddleware, RequestLoggingMiddleware
 from src.auth.router import router as auth_router
 from src.analytics.router import router as analytics_router
 from src.anomaly.router import router as anomaly_router
@@ -28,9 +28,15 @@ from src.ws.router import router as ws_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
-    from graph_store.writer import close_driver
-    await close_driver()
+    from src.utils.clients import close_clients, init_clients
+
+    await init_clients()
+    try:
+        yield
+    finally:
+        from graph_store.writer import close_driver
+        await close_clients()
+        await close_driver()
 
 
 app = FastAPI(
@@ -50,9 +56,13 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+# Origin-based CSRF defense: rejects state-changing cookie-bearing requests
+# whose Origin/Referer is not in the CORS allow-list. Necessary when running
+# behind SameSite=None (HF Spaces iframe).
+app.add_middleware(OriginCheckMiddleware, allowed_origins=_cors_origins)
 app.add_middleware(RequestLoggingMiddleware)
 
 # ---------------------------------------------------------------------------
@@ -81,7 +91,7 @@ app.include_router(tools_router)
 # ---------------------------------------------------------------------------
 
 @app.get("/health", tags=["infra"])
-async def health() -> dict:
+async def health(response: Response) -> dict:
     import asyncio
 
     results: dict = {"status": "ok", "neo4j": "unknown", "redis": "unknown", "qdrant": "unknown"}
@@ -96,38 +106,28 @@ async def health() -> dict:
         results["neo4j"] = f"error: {exc}"
         results["status"] = "degraded"
 
-    # Redis
+    # Redis — reuse module-level singleton, probe with a short timeout
     try:
-        import redis.asyncio as aioredis
-        r = aioredis.from_url(_settings.redis_url, socket_connect_timeout=3)
-        await r.ping()
-        await r.aclose()
+        from src.utils.clients import get_redis
+        r = await get_redis()
+        await asyncio.wait_for(r.ping(), timeout=3)
         results["redis"] = "ok"
     except Exception as exc:
         results["redis"] = f"error: {exc}"
         results["status"] = "degraded"
 
-    # Qdrant — supports local (host+port) and hosted (url+api_key)
+    # Qdrant — reuse module-level singleton, probe with a short timeout
     try:
-        from qdrant_client import AsyncQdrantClient
-        if _settings.qdrant_url:
-            qc = AsyncQdrantClient(
-                url=_settings.qdrant_url,
-                api_key=_settings.qdrant_api_key or None,
-                timeout=3,
-            )
-        else:
-            qc = AsyncQdrantClient(
-                host=_settings.qdrant_host,
-                port=_settings.qdrant_port,
-                timeout=3,
-            )
-        await qc.get_collections()
-        await qc.close()
+        from src.utils.clients import get_qdrant
+        qc = get_qdrant()
+        await asyncio.wait_for(qc.get_collections(), timeout=3)
         results["qdrant"] = "ok"
     except Exception as exc:
         results["qdrant"] = f"error: {exc}"
         results["status"] = "degraded"
+
+    if results["status"] != "ok":
+        response.status_code = 503
 
     return results
 

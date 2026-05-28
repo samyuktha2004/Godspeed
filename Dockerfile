@@ -13,8 +13,11 @@ WORKDIR /app
 COPY requirements.txt requirements.deploy.txt ./
 RUN pip install --no-cache-dir -r requirements.deploy.txt
 
-# Pre-download the BGE-M3 model so cold starts are fast
-RUN python3 -c "from FlagEmbedding import BGEM3FlagModel; BGEM3FlagModel('BAAI/bge-m3', use_fp16=False)"
+# Pre-download the BGE-M3 model so cold starts are fast.
+# use_fp16=True matches the runtime load in agent/tools/doc_search.py and
+# ingestion/pipeline/embedder.py — keeps the image ~1 GB smaller (half-precision
+# weights only) and avoids downloading weights the app never uses.
+RUN python3 -c "from FlagEmbedding import BGEM3FlagModel; BGEM3FlagModel('BAAI/bge-m3', use_fp16=True)"
 
 # Download spacy model
 RUN python3 -m spacy download en_core_web_sm
@@ -29,7 +32,9 @@ RUN cd frontend && npm run build
 # Copy remaining app code
 COPY . .
 
-# HuggingFace Spaces requires port 7860
+# HuggingFace Spaces requires port 7860; other platforms may inject $PORT
+ENV PORT=7860
 EXPOSE 7860
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+# Shell-form so $PORT is expanded by the container at start time
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-7860}"]

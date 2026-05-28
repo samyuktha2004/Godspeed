@@ -85,6 +85,8 @@ def upsert_chunks(chunks: list[EmbeddedChunk]) -> None:
 
 
 def delete_chunks_for_doc(doc_id: str) -> None:
+    from qdrant_client.http.exceptions import UnexpectedResponse
+
     try:
         client = _get_client()
         client.delete(
@@ -96,6 +98,17 @@ def delete_chunks_for_doc(doc_id: str) -> None:
             ),
         )
         logger.info("qdrant_store: deleted points for doc_id=%s", doc_id)
+    except UnexpectedResponse as exc:
+        # First ingest into a fresh Qdrant: collection doesn't exist yet, so there's
+        # nothing to delete. upsert_chunks will create the collection on first write.
+        if exc.status_code == 404:
+            logger.info(
+                "qdrant_store: collection %s does not exist yet — skipping delete for doc_id=%s",
+                settings.qdrant_collection, doc_id,
+            )
+            return
+        logger.exception("qdrant_store: delete failed for doc_id=%s", doc_id)
+        raise
     except Exception:
         logger.exception("qdrant_store: delete failed for doc_id=%s", doc_id)
         raise

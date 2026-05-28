@@ -30,8 +30,7 @@ export function SettingsApiKeys() {
   // Create API key
   const { mutate: createKey, isPending: isCreating } = useMutation({
     mutationFn: async (input: CreateApiKeyInput) => {
-      // TODO: POST /api/settings/api-keys
-      console.log('Create API key:', input)
+      // TODO: POST /api/settings/api-keys (gated behind VITE_ENABLE_API_KEYS until backend lands)
       return { id: 'new-key', ...input, created_at: new Date().toISOString(), is_active: true } as ApiKey
     },
     onSuccess: () => {
@@ -44,9 +43,8 @@ export function SettingsApiKeys() {
 
   // Revoke API key
   const { mutate: revokeKey, isPending: isRevoking } = useMutation({
-    mutationFn: async (id: string) => {
-      // TODO: DELETE /api/settings/api-keys/{id}
-      console.log('Revoke API key:', id)
+    mutationFn: async (_id: string) => {
+      // TODO: DELETE /api/settings/api-keys/{_id} (gated behind VITE_ENABLE_API_KEYS until backend lands)
     },
     onSuccess: () => {
       setRevokeConfirm(null)

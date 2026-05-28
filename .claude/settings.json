@@ -24,7 +24,25 @@
       "PowerShell(Get-ChildItem -Path \"d:\\\\Godspeed\\\\frontend\" -Recurse -Depth 2 | Where-Object { -not $_.PSIsContainer } | Select-Object FullName | ForEach-Object { $_.FullName.Replace\\(\"d:\\\\Godspeed\\\\\", \"\"\\) } | Sort-Object | Select-Object -First 40)",
       "PowerShell(Get-ChildItem -Path \"d:\\\\Godspeed\\\\ingestion\" -Recurse | Where-Object { -not $_.PSIsContainer } | Select-Object FullName | ForEach-Object { $_.FullName.Replace\\(\"d:\\\\Godspeed\\\\\", \"\"\\) })",
       "PowerShell(Get-ChildItem -Path \"d:\\\\Godspeed\\\\graph_store\" -Recurse | Where-Object { -not $_.PSIsContainer } | Select-Object FullName | ForEach-Object { $_.FullName.Replace\\(\"d:\\\\Godspeed\\\\\", \"\"\\) })",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(Get-ChildItem -Path 'D:\\\\Godspeed' -Recurse -Directory -Name)",
+      "Bash(find /mnt/d/Godspeed -type f -name \"*.py\" | head -30)",
+      "Read(//mnt/d/**)",
+      "Bash(python3 -c \"from agent.graph import graph; print\\(graph.get_state_input_schema\\(\\)\\)\")",
+      "Bash(python -c \"import main; print\\('main import: OK'\\); print\\('routers:', len\\(main.app.routes\\)\\)\")",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(d:/Godspeed/venv/Scripts/python.exe -c ' *)",
+      "Bash(grep -vE 'request_start|request_end|HTTP Request|^$|langgraph')",
+      "Bash(npx tsc *)",
+      "Bash(ls node_modules/react)",
+      "Bash(ls node_modules/@tanstack/react-router)",
+      "Bash(npx vite *)",
+      "Bash(node -e ' *)",
+      "Bash(Get-ChildItem -Path d:\\\\Godspeed\\\\src\\\\anomaly -Filter \"*.py\" -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-ChildItem -Path \"D:\\\\Godspeed\" -Recurse -File | Where-Object { $_.Extension -in @\\('.bin', '.pkl', '.model', '.pth', '.pt', '.onnx'\\) } | ForEach-Object { \"$\\($_.FullName\\): $\\($_.Length / 1MB\\) MB\" })"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\sanan\\.claude\\plans"
     ]
   }
 }

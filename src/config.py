@@ -104,6 +104,10 @@ class Settings(BaseSettings):
     demo_password: str  = Field(default="demo")
     admin_email:   str  = Field(default="admin@godspeed.local")
     admin_password: str = Field(default="admin")
+    # Gate the hardcoded demo/admin login fallback. Must be true to allow
+    # login when Supabase is unconfigured or the DB lookup fails. Defaults
+    # off so production deploys fail closed on hardcoded creds.
+    allow_demo_auth: bool = Field(default=False)
     # Set True when running behind HTTPS so session cookies are Secure
     cookie_secure: bool = Field(default=False)
     # SameSite=none required when app is embedded in an iframe on a different domain (e.g. HF Spaces)

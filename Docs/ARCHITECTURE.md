@@ -70,7 +70,7 @@
 │  ┌──────────────────────────────────────────────────────────────────────────┐  │
 │  │  Component Layer (shadcn/ui + Tailwind)                                 │  │
 │  │  ├─ Query & Search components                                           │  │
-│  │  ├─ Chart & data table components (Recharts, TanStack Table)           │  │
+│  │  ├─ Chart components (Recharts)                                        │  │
 │  │  ├─ Knowledge graph visualizer (Force-Graph)                           │  │
 │  │  ├─ Authentication flow (JWT)                                          │  │
 │  │  └─ Real-time notifications (WebSocket)                               │  │
@@ -274,6 +274,15 @@ src/
 7. **Redis Everywhere:** Cache, queues, session state, distributed locks, and pub/sub all via Redis.
 
 8. **Hybrid Retrieval (T1):** Dense (BGE-M3) + Sparse (BM25) via RRF — queries Qdrant.
+
+9. **Process-Level Singleton Clients:** Redis, Qdrant, and Neo4j clients are instantiated once per uvicorn process and reused across all requests. Initialised in the FastAPI `lifespan` startup hook and torn down on shutdown:
+   - `src/utils/clients.py` — `get_redis()`, `get_qdrant()` (lazy-init, `init_clients()`/`close_clients()` from `main.py` lifespan).
+   - `graph_store/writer.py:get_driver()` — Neo4j AsyncDriver singleton (closed in lifespan too).
+   - Per-request call sites (`agent/api.py`, `src/auth/router.py`, `src/admin/router.py`, `src/analytics/router.py`, `src/workspace/router.py`, `agent/tools/doc_search.py` etc.) acquire the shared client and **never** call `aclose()` / `close()` on it.
+   - Saves 50–200 ms per cookie-bearing request (no per-call TCP/TLS handshake) and prevents `TIME_WAIT` socket exhaustion under load.
+   - **Exception:** Celery worker tasks (e.g. `src/anomaly/tasks.py`) create their own Neo4j driver per task because `asyncio.run()` creates a fresh event loop each invocation — sharing an async driver across loops would error out on the second use.
+
+10. **Analytics Writes Don't Block SSE:** When `/agent/query` finishes, `agent/api.py` puts the SSE sentinel into the queue *first*, then schedules `_store_query_event` as a background task. Redis history/topics/escalation writes are pipelined into one roundtrip; Supabase upsert is fired off as a `wait_for(timeout=5)` background task. Client sees `done` event the moment the answer's final token is sent.
 
 ---
 

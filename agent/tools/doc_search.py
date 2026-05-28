@@ -18,13 +18,13 @@ logger = logging.getLogger(__name__)
 
 
 def _get_qdrant_client() -> AsyncQdrantClient:
-    """Return Qdrant client — cloud if QDRANT_URL is set, otherwise local."""
-    if settings.qdrant_url:
-        return AsyncQdrantClient(
-            url=settings.qdrant_url,
-            api_key=settings.qdrant_api_key or None,
-        )
-    return AsyncQdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
+    """Return the process-wide Qdrant singleton.
+
+    Delegates to src.utils.clients.get_qdrant — do NOT close the returned
+    client; its lifetime is owned by the FastAPI lifespan hook.
+    """
+    from src.utils.clients import get_qdrant
+    return get_qdrant()
 
 _PII_ENTITY_TYPES = [
     "person",
@@ -202,9 +202,10 @@ async def run_doc_search(
             with_payload=True,
         )
         for hit in dense_response.points:
-            doc_id = hit.payload.get("chunk_id", str(hit.id))
+            payload = hit.payload or {}
+            doc_id = payload.get("chunk_id", str(hit.id))
             qdrant_ranked_ids.append(doc_id)
-            qdrant_payload_map[doc_id] = hit.payload
+            qdrant_payload_map[doc_id] = payload
             qdrant_score_map[doc_id] = hit.score
 
         sparse_response = await client.query_points(
@@ -217,12 +218,13 @@ async def run_doc_search(
         )
         sparse_ranked_ids: list[str] = []
         for hit in sparse_response.points:
-            doc_id = hit.payload.get("chunk_id", str(hit.id))
+            payload = hit.payload or {}
+            doc_id = payload.get("chunk_id", str(hit.id))
             sparse_ranked_ids.append(doc_id)
-            qdrant_payload_map.setdefault(doc_id, hit.payload)
+            qdrant_payload_map.setdefault(doc_id, payload)
             qdrant_score_map.setdefault(doc_id, hit.score)
 
-        await client.close()
+        # NOTE: do not close `client` — it is the shared singleton.
 
     except Exception:
         logger.exception("Qdrant search failed — returning empty results")

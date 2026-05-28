@@ -25,7 +25,10 @@ REDIS_QUERY_KEY = "gs:queries"  # lpush list; each item is a JSON query event
 
 
 async def _redis() -> aioredis.Redis:
-    return aioredis.from_url(settings.redis_url, decode_responses=True)
+    # Delegates to the process-wide singleton — see src/utils/clients.py.
+    # Do NOT call aclose() on the returned client.
+    from src.utils.clients import get_redis
+    return await get_redis()
 
 
 def _cutoff(date_range: DateRange) -> datetime | None:
@@ -37,14 +40,12 @@ def _cutoff(date_range: DateRange) -> datetime | None:
 
 async def _load_events(date_range: DateRange) -> list[dict]:
     """Return query events from Redis. Returns [] if Redis is unavailable."""
-    r = await _redis()
     try:
+        r = await _redis()
         raw_list = await r.lrange(REDIS_QUERY_KEY, 0, 9999)
     except Exception as exc:
         logger.warning("analytics_redis_read_failed", extra={"error": str(exc)})
         return []
-    finally:
-        await r.aclose()
 
     cutoff = _cutoff(date_range)
     events = []
@@ -105,14 +106,12 @@ async def get_queries(date_range: DateRange = Query(default="30d")) -> dict:
 
 @router.get("/topics")
 async def get_topics(limit: int = Query(default=10, ge=1, le=50)) -> dict:
-    r = await _redis()
     try:
+        r = await _redis()
         results = await r.zrevrange("gs:topics", 0, limit - 1, withscores=True)
     except Exception as exc:
         logger.warning("topics_redis_read_failed", extra={"error": str(exc)})
         return {"topics": []}
-    finally:
-        await r.aclose()
 
     return {"topics": [{"topic": t, "count": int(c)} for t, c in results]}
 
@@ -150,19 +149,15 @@ async def _compute_freshness() -> float | None:
 async def get_knowledge_health() -> dict:
     rows: list[dict] = []
     try:
-        from graph_store.config import settings as neo4j_settings
-        from neo4j import AsyncGraphDatabase
+        # Reuse the shared driver instead of opening a new pool per request.
+        from graph_store.writer import get_driver
 
-        driver = AsyncGraphDatabase.driver(
-            neo4j_settings.neo4j_uri,
-            auth=(neo4j_settings.neo4j_username, neo4j_settings.neo4j_password),
-        )
+        driver = get_driver()
         async with driver.session() as session:
             result = await session.run(
                 "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS cnt"
             )
             rows = await result.data()
-        await driver.close()
     except Exception as exc:
         logger.warning("knowledge_health_neo4j_error", extra={"error": str(exc)})
 
@@ -200,13 +195,10 @@ async def get_knowledge_health() -> dict:
 async def get_dependencies() -> dict:
     rows: list[dict] = []
     try:
-        from graph_store.config import settings as neo4j_settings
-        from neo4j import AsyncGraphDatabase
+        # Reuse the shared driver — matches /knowledge-health and /coverage-gaps.
+        from graph_store.writer import get_driver
 
-        driver = AsyncGraphDatabase.driver(
-            neo4j_settings.neo4j_uri,
-            auth=(neo4j_settings.neo4j_username, neo4j_settings.neo4j_password),
-        )
+        driver = get_driver()
         async with driver.session() as session:
             result = await session.run(
                 """
@@ -222,7 +214,6 @@ async def get_dependencies() -> dict:
                 """
             )
             rows = await result.data()
-        await driver.close()
     except Exception as exc:
         logger.warning("dependencies_neo4j_error", extra={"error": str(exc)})
 
@@ -286,15 +277,13 @@ async def get_coverage_gaps() -> dict:
 
 @router.get("/escalations")
 async def get_escalations(limit: int = Query(default=50, ge=1, le=200)) -> dict:
-    r = await _redis()
     try:
+        r = await _redis()
         raw_list = await r.lrange("gs:escalations", 0, limit - 1)
         total    = await r.llen("gs:escalations")
     except Exception as exc:
         logger.warning("escalations_redis_read_failed", extra={"error": str(exc)})
         return {"escalations": [], "total": 0}
-    finally:
-        await r.aclose()
 
     escalations = []
     for raw in raw_list:

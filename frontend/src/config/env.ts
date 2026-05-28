@@ -11,4 +11,8 @@ export const env = {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     return `${proto}//${window.location.host}`
   },
+
+  // Feature flags — opt-in flags for incomplete UI surfaces.
+  // VITE_ENABLE_API_KEYS hides the stub API Keys tab until the backend wiring lands.
+  enableApiKeysTab: _env.VITE_ENABLE_API_KEYS === 'true',
 }

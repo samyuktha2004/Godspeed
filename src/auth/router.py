@@ -78,46 +78,52 @@ def _make_cookie_kwargs() -> dict:
 
 
 async def _redis() -> aioredis.Redis:
-    return aioredis.from_url(
-        settings.redis_url,
-        decode_responses=True,
-        socket_timeout=5,
-        socket_connect_timeout=5,
-    )
+    # Delegates to the process-wide singleton — see src/utils/clients.py.
+    # Do NOT call aclose() on the returned client; the lifespan hook owns it.
+    from src.utils.clients import get_redis
+    return await get_redis()
 
 
-# In-memory fallback when Redis is unreachable (single-process deploy)
-_mem_sessions: dict[str, str] = {}
+# In-memory fallback when Redis is unreachable (single-process deploy).
+# Stored as (serialised_payload, expires_at_epoch) so we can enforce SESSION_TTL
+# independently of Redis — otherwise a Redis outage during the session would
+# effectively grant an infinite-lived cookie.
+import time as _time
+_mem_sessions: dict[str, tuple[str, float]] = {}
+
+
+def _mem_expired(expires_at: float) -> bool:
+    return _time.time() >= expires_at
 
 
 async def _get_session(session_id: str) -> dict | None:
     try:
         r = await _redis()
-        try:
-            raw = await r.get(f"gs:session:{session_id}")
-            if raw:
-                return json.loads(raw)
-        finally:
-            await r.aclose()
+        raw = await r.get(f"gs:session:{session_id}")
+        if raw:
+            return json.loads(raw)
     except Exception:
         pass
     # Fallback to in-memory
-    raw = _mem_sessions.get(session_id)
-    return json.loads(raw) if raw else None
+    entry = _mem_sessions.get(session_id)
+    if not entry:
+        return None
+    raw, expires_at = entry
+    if _mem_expired(expires_at):
+        _mem_sessions.pop(session_id, None)
+        return None
+    return json.loads(raw)
 
 
 async def _set_session(session_id: str, payload: dict) -> bool:
     serialised = json.dumps(payload)
     try:
         r = await _redis()
-        try:
-            await r.setex(f"gs:session:{session_id}", SESSION_TTL, serialised)
-            return True
-        finally:
-            await r.aclose()
+        await r.setex(f"gs:session:{session_id}", SESSION_TTL, serialised)
+        return True
     except Exception as exc:
         logger.warning("redis_unavailable — using in-memory session store", extra={"error": str(exc)})
-        _mem_sessions[session_id] = serialised
+        _mem_sessions[session_id] = (serialised, _time.time() + SESSION_TTL)
         return True
 
 
@@ -125,10 +131,7 @@ async def _del_session(session_id: str) -> None:
     _mem_sessions.pop(session_id, None)
     try:
         r = await _redis()
-        try:
-            await r.delete(f"gs:session:{session_id}")
-        finally:
-            await r.aclose()
+        await r.delete(f"gs:session:{session_id}")
     except Exception:
         pass
 
@@ -181,6 +184,10 @@ async def login(body: LoginRequest, response: Response) -> dict:
 
     # ── Fall back to hardcoded dev credentials ───────────────
     if user_obj is None:
+        if not settings.allow_demo_auth:
+            # Fail closed: do not leak whether the email exists in DB
+            logger.warning("auth_failed_demo_disabled", extra={"email": email})
+            raise HTTPException(status_code=401, detail="Invalid credentials")
         entry = _CREDENTIALS.get(email)
         if not entry or entry["password"] != body.password:
             logger.warning("auth_failed", extra={"email": email})
@@ -246,10 +253,7 @@ async def google_authorize() -> RedirectResponse:
 
     state = secrets.token_urlsafe(32)
     r = await _redis()
-    try:
-        await r.setex(f"gs:oauth:state:{state}", _OAUTH_STATE_TTL, "1")
-    finally:
-        await r.aclose()
+    await r.setex(f"gs:oauth:state:{state}", _OAUTH_STATE_TTL, "1")
 
     params = {
         "client_id":     settings.google_oauth_client_id,
@@ -287,15 +291,12 @@ async def google_callback(
 
     # Validate CSRF state from Redis
     r = await _redis()
-    try:
-        state_key = f"gs:oauth:state:{state}"
-        valid = await r.get(state_key)
-        if not valid:
-            logger.warning("oauth_invalid_state — possible CSRF or expired flow")
-            return RedirectResponse(_frontend_error, status_code=302)
-        await r.delete(state_key)
-    finally:
-        await r.aclose()
+    state_key = f"gs:oauth:state:{state}"
+    valid = await r.get(state_key)
+    if not valid:
+        logger.warning("oauth_invalid_state — possible CSRF or expired flow")
+        return RedirectResponse(_frontend_error, status_code=302)
+    await r.delete(state_key)
 
     # Exchange authorization code for Google tokens
     try:
@@ -446,10 +447,7 @@ async def send_invite(
     })
 
     r = await _redis()
-    try:
-        await r.setex(f"gs:invite:{token}", _INVITE_TTL, payload)
-    finally:
-        await r.aclose()
+    await r.setex(f"gs:invite:{token}", _INVITE_TTL, payload)
 
     invite_url = f"{settings.frontend_url}/accept-invite?token={token}"
     html = (
@@ -469,10 +467,7 @@ async def send_invite(
 async def get_invite(token: str) -> dict:
     """Look up an invite token and return the display fields (no auth required)."""
     r = await _redis()
-    try:
-        raw = await r.get(f"gs:invite:{token}")
-    finally:
-        await r.aclose()
+    raw = await r.get(f"gs:invite:{token}")
 
     if not raw:
         raise HTTPException(status_code=404, detail="Invite not found or expired")
@@ -489,60 +484,56 @@ async def get_invite(token: str) -> dict:
 async def accept_invite(body: AcceptInviteRequest, response: Response) -> dict:
     """Accept an invite, create the user account, and start a session."""
     r = await _redis()
+    raw = await r.get(f"gs:invite:{body.token}")
+    if not raw:
+        raise HTTPException(status_code=404, detail="Invite not found or expired")
+    invite = json.loads(raw)
+
+    import bcrypt
+    from src.auth.db import get_allowed_channel_ids, get_user_team_id
+
+    password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt()).decode()
+
+    # Insert user into Supabase
     try:
-        raw = await r.get(f"gs:invite:{body.token}")
-        if not raw:
-            raise HTTPException(status_code=404, detail="Invite not found or expired")
-        invite = json.loads(raw)
+        from src.auth.db import _client as _db_client
+        insert_result = (
+            _db_client()
+            .table("users")
+            .insert({
+                "workspace_id":  _DEFAULT_WORKSPACE_ID,
+                "email":         invite["email"],
+                "name":          invite["name"],
+                "password_hash": password_hash,
+                "role":          invite["role"],
+                "is_new_hire":   True,
+                "is_active":     True,
+            })
+            .execute()
+        )
+        db_user = insert_result.data[0] if insert_result.data else None
+        if not db_user:
+            raise RuntimeError("insert returned no data")
+    except Exception:
+        logger.exception("accept_invite: user insert failed for %s", invite["email"])
+        raise HTTPException(status_code=500, detail="Failed to create user account")
 
-        import bcrypt
-        from src.auth.db import get_allowed_channel_ids, get_user_team_id
+    # One-time use — delete the invite key only after successful insert
+    await r.delete(f"gs:invite:{body.token}")
 
-        password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt()).decode()
+    channel_ids = get_allowed_channel_ids(db_user["id"], db_user["role"])
+    team_id     = get_user_team_id(db_user["id"]) or "default"
 
-        # Insert user into Supabase
-        try:
-            from src.auth.db import _client as _db_client
-            insert_result = (
-                _db_client()
-                .table("users")
-                .insert({
-                    "workspace_id":  _DEFAULT_WORKSPACE_ID,
-                    "email":         invite["email"],
-                    "name":          invite["name"],
-                    "password_hash": password_hash,
-                    "role":          invite["role"],
-                    "is_new_hire":   True,
-                    "is_active":     True,
-                })
-                .execute()
-            )
-            db_user = insert_result.data[0] if insert_result.data else None
-            if not db_user:
-                raise RuntimeError("insert returned no data")
-        except Exception:
-            logger.exception("accept_invite: user insert failed for %s", invite["email"])
-            raise HTTPException(status_code=500, detail="Failed to create user account")
-
-        # One-time use — delete the invite key only after successful insert
-        await r.delete(f"gs:invite:{body.token}")
-
-        channel_ids = get_allowed_channel_ids(db_user["id"], db_user["role"])
-        team_id     = get_user_team_id(db_user["id"]) or "default"
-
-        user_obj = {
-            "id":                  db_user["id"],
-            "email":               db_user["email"],
-            "name":                db_user["name"],
-            "role":                db_user["role"],
-            "team_id":             team_id,
-            "team":                {"id": team_id, "name": team_id.capitalize()},
-            "is_new_hire":         db_user.get("is_new_hire", True),
-            "allowed_channel_ids": channel_ids,
-        }
-
-    finally:
-        await r.aclose()
+    user_obj = {
+        "id":                  db_user["id"],
+        "email":               db_user["email"],
+        "name":                db_user["name"],
+        "role":                db_user["role"],
+        "team_id":             team_id,
+        "team":                {"id": team_id, "name": team_id.capitalize()},
+        "is_new_hire":         db_user.get("is_new_hire", True),
+        "allowed_channel_ids": channel_ids,
+    }
 
     session_id = str(uuid4())
     stored = await _set_session(

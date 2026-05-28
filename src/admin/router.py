@@ -21,7 +21,10 @@ REDIS_SOURCES_KEY = "gs:data_sources"
 
 
 async def _redis() -> aioredis.Redis:
-    return aioredis.from_url(settings.redis_url, decode_responses=True)
+    # Delegates to the process-wide singleton — see src/utils/clients.py.
+    # Do NOT call aclose() on the returned client.
+    from src.utils.clients import get_redis
+    return await get_redis()
 
 
 # ---------------------------------------------------------------------------
@@ -81,8 +84,8 @@ def _default_sources() -> list[dict]:
 
 
 async def _load_sources() -> list[dict]:
-    r = await _redis()
     try:
+        r = await _redis()
         raw = await r.get(REDIS_SOURCES_KEY)
         if raw:
             return json.loads(raw)
@@ -92,18 +95,14 @@ async def _load_sources() -> list[dict]:
     except Exception as exc:
         logger.warning("admin_load_sources_failed", extra={"error": str(exc)})
         return _default_sources()
-    finally:
-        await r.aclose()
 
 
 async def _save_sources(sources: list[dict]) -> None:
-    r = await _redis()
     try:
+        r = await _redis()
         await r.set(REDIS_SOURCES_KEY, json.dumps(sources))
     except Exception as exc:
         logger.warning("admin_save_sources_failed", extra={"error": str(exc)})
-    finally:
-        await r.aclose()
 
 
 async def update_source_sync_status(

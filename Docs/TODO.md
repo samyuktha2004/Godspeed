@@ -5,6 +5,43 @@
 
 ---
 
+## ✅ Security + Performance + Cleanup Pass (done)
+
+End-to-end sweep produced two passes of fixes; see `C:\Users\sanan\.claude\plans\do-an-end-to-end-sweep-majestic-harbor.md` and `reduce-weight-and-latency.md` for the full punch-lists.
+
+**Security (critical/high):**
+- `/ingest/confluence`, `/github`, `/upload`, `/jobs/{id}` — all now require `Depends(get_current_user)`; team_id is enforced against the session unless caller is `admin`/`org_admin`.
+- `/api/ingest/file` and `/api/ingest/folder` (`src/file_agent/router.py`) — same auth dep added. Folder ingest is admin-only and rejects paths outside `FILE_WATCH_FOLDER` (path-traversal guard).
+- `/api/workspace/history` and `/api/query/{id}/feedback` — now authed; history is team-scoped.
+- New `OriginCheckMiddleware` in `src/utils/middleware.py` — rejects state-changing requests whose `Origin`/`Referer` is not in `CORS_ORIGINS` (defense-in-depth for `SameSite=None` deploys, e.g. HF Spaces). CORS `allow_methods` narrowed from `["*"]` to an explicit list.
+- Hardcoded demo/admin credentials gated behind new `ALLOW_DEMO_AUTH` env var (default `false`).
+- In-memory session fallback now enforces `SESSION_TTL` (stored as `(payload, expires_at)`).
+- `QueryInput.query` has `max_length=10_000`; file uploads cap at 50 MB (file agent) and 25 MB (ingestion PDF).
+- `/health` now returns HTTP 503 when any subsystem is degraded (was always 200).
+
+**Performance / weight:**
+- `.env.example` model defaults flipped Pro → Flash for planner + synthesiser (50–60 s queries down to 3–10 s; matches the in-code default in `agent/config.py`).
+- Removed unused frontend deps `framer-motion` and `@tanstack/react-table` (~250 KB off the bundle).
+- `Dockerfile` BGE-M3 pre-download now uses `use_fp16=True` to match runtime — saves ~1 GB in the image.
+- Singleton Redis + Qdrant clients (`src/utils/clients.py`) wired through every per-request call site. ~50–200 ms saved per cookie-bearing request; no more `TIME_WAIT` churn.
+- `agent/api.py` analytics writes pipelined (~6 RTTs → 1) and moved to a background `asyncio.create_task` so SSE close is immediate.
+- `agent/tools/slack_search.py` — one `httpx.AsyncClient` shared across the channels loop (was creating 10 per query).
+
+**Wiring/quality:**
+- `RetrievedChunk` model gained the `metadata` field that `ticket_lookup`/`confluence_search` already passed.
+- `graph_store/stream.py` reuses the shared Neo4j driver (`get_driver()`); per-request driver creation removed.
+- `Celery` worker config got `worker_concurrency=4`, `worker_prefetch_multiplier=1`, `task_acks_late=True`.
+- `ingestion/storage/qdrant_store.py:delete_chunks_for_doc` tolerates "collection doesn't exist" on first ingest (was aborting whole job).
+- `src/analytics/router.py:/knowledge-health` + `/dependencies` reuse `graph_store/writer.get_driver()` instead of opening a per-request driver.
+- API Keys tab hidden behind `VITE_ENABLE_API_KEYS` until backend `/api/settings/api-keys` endpoints ship (S13 below).
+
+**Disproven / left as-is:**
+- `agent/api.py:172-176` admin RBAC bypass is **correct** — admins get `allowed_channel_ids=[]` which routes `doc_search` to the team_id-only filter, matching the commit intent.
+- `agent/tools/summariser.py` is intentionally a stub for future map-reduce summarisation; the planner enum + fallback edge in `agent/graph.py:321` is the design hook. Do not remove.
+- `agent/tools/live_docs.py` same pattern.
+
+---
+
 ## ✅ Persona Gap-Fix Pass (done)
 
 End-to-end runthrough across 4 personas (end-user, admin, analyst, new user) found and fixed:
@@ -260,7 +297,7 @@ Query history, citation lists, and admin tables will grow. Without virtualizatio
 - [ ] Add `@tanstack/react-virtual` to dependencies
 - [ ] Wrap `QueryHistory.tsx` list in `useVirtualizer` — render only visible rows
 - [ ] Wrap `Citations.tsx` if citation count exceeds 20 (add a `virtualise` prop, off by default)
-- [ ] Wrap all TanStack Table instances in admin with row virtualization
+- [ ] ~~Wrap all TanStack Table instances in admin with row virtualization~~ — DROPPED: `@tanstack/react-table` was uninstalled (no imports in `frontend/src/`); admin tables are plain HTML tables. Revisit if a real table lib is reintroduced.
 
 ### S3 — Graph Scalability (medium ROI, medium effort)
 

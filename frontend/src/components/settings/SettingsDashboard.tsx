@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
+import { env } from '@/config/env'
 import { SettingsProfile } from './SettingsProfile'
 import { SettingsPreferences } from './SettingsPreferences'
 import { SettingsApiKeys } from './SettingsApiKeys'
@@ -9,7 +10,8 @@ type SettingsTab = 'profile' | 'preferences' | 'api-keys'
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'profile', label: 'Profile' },
   { id: 'preferences', label: 'Preferences' },
-  { id: 'api-keys', label: 'API Keys' },
+  // API Keys is stub UI — kept behind a feature flag until the backend exists.
+  ...(env.enableApiKeysTab ? [{ id: 'api-keys' as SettingsTab, label: 'API Keys' }] : []),
 ]
 
 export function SettingsDashboard() {
@@ -50,7 +52,7 @@ export function SettingsDashboard() {
       <div className="rounded-lg border border-surface-subtle bg-white dark:bg-stone-900">
         {tab === 'profile' && <SettingsProfile />}
         {tab === 'preferences' && <SettingsPreferences />}
-        {tab === 'api-keys' && <SettingsApiKeys />}
+        {tab === 'api-keys' && env.enableApiKeysTab && <SettingsApiKeys />}
       </div>
     </div>
   )

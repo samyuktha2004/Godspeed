@@ -7,7 +7,10 @@ from pydantic import BaseModel, Field
 
 
 class QueryInput(BaseModel):
-    query:      str
+    # 10k chars is well above any reasonable user query and well below the
+    # BGE-M3 / Gemini context limits. Prevents accidental/adversarial OOM on
+    # the embedding model.
+    query:      str = Field(..., min_length=1, max_length=10_000)
     team_id:    str
     session_id: str
     # Populated server-side from the auth session — never trusted from the client body.
@@ -33,6 +36,7 @@ class RetrievedChunk(BaseModel):
     source_type: str
     score: float
     reranker_score: Optional[float] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentResult(BaseModel):
