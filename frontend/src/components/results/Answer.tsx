@@ -58,13 +58,18 @@ export function Answer({ text, className }: Props) {
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={{
-          // pre wraps fenced code blocks — delegate to CodeBlock
+          // Fenced code blocks: <pre><code>…</code></pre>
+          // We replace <pre> with a passthrough and detect block code in the
+          // code renderer by checking for a language class (always present on
+          // fenced blocks) OR actual multi-line content (unnamed fenced blocks).
           pre: ({ children }) => <>{children}</>,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          code: (({ className: cls, children, node, ...props }: any) => {
-            const isBlock = node?.position && String(children).includes('\n')
+          code: (({ className: cls, children, ...props }: any) => {
+            const hasLangClass = !!cls?.startsWith('language-')
+            const isMultiline  = String(children).includes('\n')
+            const isBlock      = hasLangClass || isMultiline
             if (isBlock) return <CodeBlock className={cls} {...props}>{children}</CodeBlock>
-            return <InlineCode className={cls} {...props}>{children}</InlineCode>
+            return <InlineCode {...props}>{children}</InlineCode>
           }),
         }}
       >

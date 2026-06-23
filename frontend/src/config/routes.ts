@@ -8,6 +8,7 @@ import { lazy } from 'react'
 
 import App from '@/App'
 import { useAuthStore } from '@/stores/authStore'
+import { isAdmin } from '@/lib/utils'
 
 const Home          = lazy(() => import('@/pages/Home'))
 const QueryPage     = lazy(() => import('@/pages/QueryPage'))
@@ -16,9 +17,11 @@ const Admin         = lazy(() => import('@/pages/AdminPage'))
 const Workspace     = lazy(() => import('@/pages/WorkspacePage'))
 const Settings      = lazy(() => import('@/pages/SettingsPage'))
 const Login         = lazy(() => import('@/pages/LoginPage'))
-const OAuthCallback   = lazy(() => import('@/pages/OAuthCallbackPage'))
-const AcceptInvite    = lazy(() => import('@/pages/AcceptInvitePage'))
-const NotFound        = lazy(() => import('@/pages/NotFoundPage'))
+const Register      = lazy(() => import('@/pages/RegisterPage'))
+const Setup         = lazy(() => import('@/pages/SetupPage'))
+const OAuthCallback = lazy(() => import('@/pages/OAuthCallbackPage'))
+const AcceptInvite  = lazy(() => import('@/pages/AcceptInvitePage'))
+const NotFound      = lazy(() => import('@/pages/NotFoundPage'))
 
 const requireAuth = () => {
   if (!useAuthStore.getState().isAuthenticated) {
@@ -28,8 +31,7 @@ const requireAuth = () => {
 
 const requireAdmin = () => {
   requireAuth()
-  const role = useAuthStore.getState().user?.role
-  if (role !== 'admin' && role !== 'org_admin') {
+  if (!isAdmin(useAuthStore.getState().user)) {
     throw redirect({ to: '/' })
   }
 }
@@ -102,6 +104,19 @@ export const settingsRoute = createRoute({
   component:      Settings,
 })
 
+export const registerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path:           '/register',
+  component:      Register,
+})
+
+export const setupRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path:           '/setup',
+  beforeLoad:     requireAuth,
+  component:      Setup,
+})
+
 export const acceptInviteRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/accept-invite',
@@ -119,6 +134,8 @@ export const notFoundRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
+  registerRoute,
+  setupRoute,
   oauthCallbackRoute,
   acceptInviteRoute,
   homeRoute,

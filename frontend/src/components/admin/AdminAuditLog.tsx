@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/http'
-import { AuditLogEntry } from '@/types/settings'
-import { LoadingSkeleton } from '../common/LoadingSkeleton'
+import type { AuditLogEntry } from '@/types/settings'
+import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 
 const ACTION_ICONS: Record<string, string> = {
   grant_channel: '✅',
@@ -26,36 +26,41 @@ const ACTION_COLORS: Record<string, string> = {
   bulk_user_import: 'text-green-600 dark:text-green-400',
 }
 
-export function AdminAuditLog() {
-  const [filterAction, setFilterAction] = useState<string>('all')
-  const [filterType, setFilterType] = useState<string>('all')
+const ALL_ACTIONS     = ['grant_channel','revoke_channel','change_role','invite_user','deactivate_user','query_executed','document_accessed','bulk_user_import']
+const ALL_TARGET_TYPES = ['user','channel','team','query','document']
 
-  // Fetch audit log
-  const { data: auditEntries, isLoading, refetch } = useQuery({
+async function fetchAuditLog(action: string, targetType: string): Promise<AuditLogEntry[]> {
+  const params = new URLSearchParams()
+  if (action !== 'all')     params.set('action', action)
+  if (targetType !== 'all') params.set('target_type', targetType)
+  const res  = await apiFetch(`/api/admin/audit-log?${params}`)
+  const data = await res.json()
+  return (data.entries ?? data) as AuditLogEntry[]
+}
+
+async function handleExportCSV() {
+  const res  = await apiFetch('/api/admin/audit-log/export?format=csv')
+  const blob = await res.blob()
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href     = url
+  a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export function AdminAuditLog() {
+  const [filterAction, setFilterAction] = useState('all')
+  const [filterType,   setFilterType]   = useState('all')
+
+  const { data: auditEntries = [], isLoading } = useQuery({
     queryKey: ['audit-log', filterAction, filterType],
-    queryFn: async () => {
-      // TODO: GET /api/audit-log?action=X&target_type=Y
-      return [] as AuditLogEntry[]
-    },
+    queryFn:  () => fetchAuditLog(filterAction, filterType),
+    staleTime: 30_000,
   })
 
-  const allActions = [
-    'grant_channel',
-    'revoke_channel',
-    'change_role',
-    'invite_user',
-    'deactivate_user',
-    'query_executed',
-    'document_accessed',
-    'bulk_user_import',
-  ]
-
-  const allTargetTypes = ['user', 'channel', 'team', 'query', 'document']
-
-  const handleExportCSV = () => {
-    // TODO: GET /api/audit-log/export?format=csv
-    console.log('Export audit log as CSV')
-  }
+  const allActions      = ALL_ACTIONS
+  const allTargetTypes  = ALL_TARGET_TYPES
 
   return (
     <div className="space-y-6 p-6">

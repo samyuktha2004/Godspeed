@@ -11,11 +11,12 @@ type Callbacks = {
 export type StreamState = 'idle' | 'loading' | 'streaming' | 'complete' | 'error'
 
 export function useSSEStream() {
-  const [state, setState]                   = useState<StreamState>('idle')
-  const [error, setError]                   = useState<string | null>(null)
-  const firstEventRef                        = useRef(false)
-  const completedRef                         = useRef(false)
-  const abortRef                             = useRef<AbortController | null>(null)
+  const [state, setState]             = useState<StreamState>('idle')
+  const [error, setError]             = useState<string | null>(null)
+  const [firstEventArrived, setFirstEventArrived] = useState(false)
+  const firstEventRef                 = useRef(false)
+  const completedRef                  = useRef(false)
+  const abortRef                      = useRef<AbortController | null>(null)
 
   const stream = useCallback(
     async (input: QueryInput, callbacks: Callbacks) => {
@@ -27,6 +28,7 @@ export function useSSEStream() {
       firstEventRef.current = false
       completedRef.current  = false
       setState('loading')
+      setFirstEventArrived(false)
       setError(null)
 
       // Hard timeout — fire error event if backend stalls
@@ -76,6 +78,7 @@ export function useSSEStream() {
             // First event received — transition loading → streaming
             if (!firstEventRef.current) {
               firstEventRef.current = true
+              setFirstEventArrived(true)
               setState('streaming')
               clearTimeout(timeoutId)
             }
@@ -134,7 +137,7 @@ export function useSSEStream() {
   return {
     state,
     error,
-    firstEventArrived: firstEventRef,
+    firstEventArrived,
     stream,
     cancel,
   }

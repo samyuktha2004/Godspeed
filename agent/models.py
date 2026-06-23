@@ -33,6 +33,7 @@ class RetrievedChunk(BaseModel):
     source_type: str
     score: float
     reranker_score: Optional[float] = None
+    title: Optional[str] = None
 
 
 class AgentResult(BaseModel):

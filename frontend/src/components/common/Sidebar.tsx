@@ -9,7 +9,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useNotifications } from '@/hooks/useNotifications'
 import { NotificationCenter } from './NotificationCenter'
 import { apiFetch } from '@/lib/http'
-import { cn } from '@/lib/utils'
+import { cn, isAdmin } from '@/lib/utils'
 import { useState } from 'react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -62,9 +62,7 @@ export function Sidebar() {
     navigate({ to: '/login' })
   }
 
-  const navItems = (user?.role === 'admin' || user?.role === 'org_admin')
-    ? [...BASE_NAV, ADMIN_NAV]
-    : BASE_NAV
+  const navItems = isAdmin(user) ? [...BASE_NAV, ADMIN_NAV] : BASE_NAV
 
   return (
     <>

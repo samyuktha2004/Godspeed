@@ -1,144 +1,170 @@
 import { useState } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/http'
-import { Channel, CreateChannelInput, ChannelSensitivity } from '@/types/settings'
-import { LoadingSkeleton } from '../common/LoadingSkeleton'
+import { useUIStore } from '@/stores/uiStore'
+import type { Channel, CreateChannelInput, ChannelSensitivity } from '@/types/settings'
+import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
+import { cn } from '@/lib/utils'
 
-const SENSITIVITY_COLORS: Record<ChannelSensitivity, string> = {
-  public: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-  internal: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-  confidential: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200',
-  restricted: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
+const SENSITIVITY_STYLES: Record<ChannelSensitivity, string> = {
+  public:       'bg-green-100  text-green-800  dark:bg-green-900/30  dark:text-green-300',
+  internal:     'bg-blue-100   text-blue-800   dark:bg-blue-900/30   dark:text-blue-300',
+  confidential: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300',
+  restricted:   'bg-red-100    text-red-800    dark:bg-red-900/30    dark:text-red-300',
 }
 
-const SENSITIVITY_ICONS: Record<ChannelSensitivity, string> = {
-  public: '🌐',
-  internal: '🔒',
-  confidential: '🔐',
-  restricted: '🚫',
+const SENSITIVITY_LABELS: Record<ChannelSensitivity, string> = {
+  public:       '🌐 Public',
+  internal:     '🔒 Internal',
+  confidential: '🔐 Confidential',
+  restricted:   '🚫 Restricted',
 }
+
+const SENSITIVITY_HINTS: Record<ChannelSensitivity, string> = {
+  public:       'Visible to all team members',
+  internal:     'Team members only',
+  confidential: 'Restricted to specified roles',
+  restricted:   'Requires explicit per-user grant',
+}
+
+async function fetchChannels(): Promise<Channel[]> {
+  const res  = await apiFetch('/api/admin/channels')
+  const data = await res.json()
+  return (data.channels ?? data) as Channel[]
+}
+
+async function createChannel(input: CreateChannelInput): Promise<Channel> {
+  const res = await apiFetch('/api/admin/channels', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(input),
+  })
+  return res.json()
+}
+
+async function deleteChannel(id: string): Promise<void> {
+  await apiFetch(`/api/admin/channels/${id}`, { method: 'DELETE' })
+}
+
+const INPUT_CLASS =
+  'block w-full rounded border border-surface-subtle bg-white px-3 py-2 text-sm text-stone-900 placeholder-stone-400 focus:outline-brand dark:border-stone-600 dark:bg-stone-800 dark:text-white'
 
 export function AdminChannelManagement() {
-  const [showAddForm, setShowAddForm] = useState(false)
-  const [formData, setFormData] = useState<CreateChannelInput>({
-    name: '',
-    sensitivity: 'internal',
+  const qc       = useQueryClient()
+  const addToast = useUIStore((s) => s.addToast)
+  const [showForm, setShowForm] = useState(false)
+  const [form, setForm] = useState<CreateChannelInput>({ name: '', sensitivity: 'internal' })
+
+  const { data: channels = [], isLoading } = useQuery({
+    queryKey: ['admin-channels'],
+    queryFn:  fetchChannels,
+    staleTime: 60_000,
   })
 
-  // Fetch channels
-  const { data: channels, isLoading, refetch } = useQuery({
-    queryKey: ['workspace-channels'],
-    queryFn: async () => {
-      // TODO: GET /api/workspace/channels
-      return [] as Channel[]
-    },
-  })
-
-  // Create channel
-  const { mutate: createChannel, isPending: isCreating } = useMutation({
-    mutationFn: async (input: CreateChannelInput) => {
-      // TODO: POST /api/workspace/channels
-      console.log('Create channel:', input)
-    },
+  const create = useMutation({
+    mutationFn: createChannel,
     onSuccess: () => {
-      setFormData({ name: '', sensitivity: 'internal' })
-      setShowAddForm(false)
-      refetch()
+      qc.invalidateQueries({ queryKey: ['admin-channels'] })
+      setForm({ name: '', sensitivity: 'internal' })
+      setShowForm(false)
+      addToast({ type: 'success', message: 'Channel created' })
     },
+    onError: () => addToast({ type: 'error', message: 'Failed to create channel' }),
   })
 
-  const handleCreateChannel = () => {
-    if (!formData.name.trim()) return
-    createChannel(formData)
+  const remove = useMutation({
+    mutationFn: deleteChannel,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin-channels'] })
+      addToast({ type: 'success', message: 'Channel deleted' })
+    },
+    onError: () => addToast({ type: 'error', message: 'Failed to delete channel' }),
+  })
+
+  const handleCreate = () => {
+    if (!form.name.trim()) return
+    create.mutate(form)
   }
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="flex flex-col gap-5 p-5">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold">Channels</h3>
-          <p className="mt-1 text-xs text-stone-500">{channels?.length || 0} channels total</p>
+          <p className="text-sm font-medium">Channels</p>
+          <p className="text-xs text-stone-400">{channels.length} channel{channels.length !== 1 ? 's' : ''} · controls who can search which documents</p>
         </div>
         <button
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-dark"
+          onClick={() => setShowForm((v) => !v)}
+          className="rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-dark"
         >
-          + Add Channel
+          + Add channel
         </button>
       </div>
 
-      {/* Create Channel Form */}
-      {showAddForm && (
-        <div className="space-y-4 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-stone-900">
-          <div>
-            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300">
-              Channel Name
-            </label>
+      {/* Create form */}
+      {showForm && (
+        <div className="flex flex-col gap-4 rounded-xl border border-brand/20 bg-brand/5 p-4 dark:bg-brand/10">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-stone-600 dark:text-stone-400">Channel name</label>
             <input
               type="text"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              placeholder="e.g., Engineering, HR, Finance"
-              className="mt-1 block w-full rounded border border-stone-300 bg-white px-3 py-2 text-stone-900 placeholder-stone-400 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand dark:border-stone-600 dark:bg-stone-800 dark:text-white"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="e.g. Engineering, HR, Finance"
+              className={INPUT_CLASS}
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300">
-              Data Source Type (Optional)
-            </label>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-stone-600 dark:text-stone-400">Data source type (optional)</label>
             <select
-              value={formData.source_type || ''}
-              onChange={(e) => setFormData({ ...formData, source_type: e.target.value || undefined })}
-              className="mt-1 block w-full rounded border border-stone-300 bg-white px-3 py-2 text-stone-900 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand dark:border-stone-600 dark:bg-stone-800 dark:text-white"
+              value={form.source_type ?? ''}
+              onChange={(e) => setForm({ ...form, source_type: e.target.value || undefined })}
+              className={INPUT_CLASS}
             >
               <option value="">General</option>
               <option value="github">GitHub</option>
               <option value="confluence">Confluence</option>
               <option value="jira">Jira</option>
-              <option value="notion">Notion</option>
               <option value="slack">Slack</option>
-              <option value="file">File Upload</option>
+              <option value="file">File upload</option>
             </select>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300">
-              Sensitivity Level
-            </label>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              {(Object.keys(SENSITIVITY_COLORS) as ChannelSensitivity[]).map((level) => (
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-medium text-stone-600 dark:text-stone-400">Sensitivity</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(Object.keys(SENSITIVITY_STYLES) as ChannelSensitivity[]).map((level) => (
                 <button
                   key={level}
-                  onClick={() => setFormData({ ...formData, sensitivity: level })}
-                  className={`rounded border-2 px-3 py-2 text-left text-sm font-medium transition-colors ${
-                    formData.sensitivity === level
-                      ? `border-brand ${SENSITIVITY_COLORS[level]}`
-                      : 'border-stone-300 text-stone-700 hover:border-stone-400 dark:border-stone-600 dark:text-stone-300'
-                  }`}
+                  type="button"
+                  onClick={() => setForm({ ...form, sensitivity: level })}
+                  className={cn(
+                    'rounded-lg border-2 px-3 py-2 text-left text-xs font-medium transition-colors',
+                    form.sensitivity === level
+                      ? `border-brand ${SENSITIVITY_STYLES[level]}`
+                      : 'border-surface-subtle bg-white text-stone-600 hover:border-stone-300 dark:bg-stone-900 dark:text-stone-300',
+                  )}
                 >
-                  <span className="mr-2">{SENSITIVITY_ICONS[level]}</span>
-                  {level.charAt(0).toUpperCase() + level.slice(1)}
+                  <p>{SENSITIVITY_LABELS[level]}</p>
+                  <p className="mt-0.5 font-normal opacity-70">{SENSITIVITY_HINTS[level]}</p>
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-xs text-stone-500">
-              • Public: visible to all • Internal: team members only • Confidential: executives only • Restricted: need approval
-            </p>
           </div>
 
           <div className="flex gap-2">
             <button
-              onClick={handleCreateChannel}
-              disabled={isCreating || !formData.name.trim()}
-              className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-50"
+              onClick={handleCreate}
+              disabled={create.isPending || !form.name.trim()}
+              className="rounded-lg bg-brand px-4 py-1.5 text-xs font-medium text-white hover:bg-brand-dark disabled:opacity-60"
             >
-              {isCreating ? 'Creating...' : 'Create Channel'}
+              {create.isPending ? 'Creating…' : 'Create channel'}
             </button>
             <button
-              onClick={() => setShowAddForm(false)}
-              className="rounded border border-stone-300 px-3 py-1.5 text-sm font-medium text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:text-stone-300 dark:hover:bg-stone-700"
+              onClick={() => setShowForm(false)}
+              className="rounded-lg border border-surface-subtle px-4 py-1.5 text-xs font-medium text-stone-600 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-800"
             >
               Cancel
             </button>
@@ -146,53 +172,50 @@ export function AdminChannelManagement() {
         </div>
       )}
 
-      {/* Channels List */}
-      <div>
-        {isLoading ? (
-          <LoadingSkeleton rows={4} className="h-16" />
-        ) : channels && channels.length > 0 ? (
-          <div className="grid gap-3">
-            {channels.map((channel) => (
-              <div
-                key={channel.id}
-                className="flex items-start justify-between rounded-lg border border-stone-200 p-4 dark:border-stone-700"
-              >
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <h4 className="font-medium text-stone-900 dark:text-white">{channel.name}</h4>
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                        SENSITIVITY_COLORS[channel.sensitivity]
-                      }`}
-                    >
-                      {SENSITIVITY_ICONS[channel.sensitivity]} {channel.sensitivity}
+      {/* List */}
+      {isLoading ? (
+        <LoadingSkeleton rows={4} />
+      ) : channels.length === 0 ? (
+        <div className="rounded-xl border-2 border-dashed border-surface-subtle py-12 text-center">
+          <p className="text-sm text-stone-500">No channels yet.</p>
+          <p className="mt-1 text-xs text-stone-400">
+            Channels control which documents users can search. Start by adding one.
+          </p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {channels.map((ch) => (
+            <div
+              key={ch.id}
+              className="flex items-center justify-between rounded-xl border border-surface-subtle p-4"
+            >
+              <div className="flex items-center gap-3">
+                <div>
+                  <p className="text-sm font-medium text-stone-900 dark:text-stone-100">{ch.name}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', SENSITIVITY_STYLES[ch.sensitivity])}>
+                      {SENSITIVITY_LABELS[ch.sensitivity]}
+                    </span>
+                    {ch.source_type && (
+                      <span className="text-xs text-stone-400">{ch.source_type}</span>
+                    )}
+                    <span className="text-xs text-stone-400">
+                      Created {new Date(ch.created_at).toLocaleDateString()}
                     </span>
                   </div>
-                  <div className="mt-2 flex gap-3 text-xs text-stone-600 dark:text-stone-400">
-                    {channel.source_type && <span>📁 {channel.source_type}</span>}
-                    <span>Created {new Date(channel.created_at).toLocaleDateString()}</span>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <button className="text-xs font-medium text-stone-500 hover:text-brand">
-                    Edit
-                  </button>
-                  <button className="text-xs font-medium text-stone-500 hover:text-red-600">
-                    Delete
-                  </button>
                 </div>
               </div>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-lg border-2 border-dashed border-stone-300 p-8 text-center dark:border-stone-600">
-            <p className="text-sm text-stone-500">No channels yet</p>
-            <p className="mt-1 text-xs text-stone-400">
-              Create your first channel to organize data by team or department
-            </p>
-          </div>
-        )}
-      </div>
+              <button
+                onClick={() => remove.mutate(ch.id)}
+                disabled={remove.isPending}
+                className="text-xs text-stone-400 hover:text-red-600 disabled:opacity-40"
+              >
+                Delete
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

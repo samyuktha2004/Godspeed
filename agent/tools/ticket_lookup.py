@@ -56,7 +56,7 @@ async def run_ticket_lookup(query: str, team_id: str) -> list[RetrievedChunk]:
                 source=p.get("source", ""),
                 source_type="jira",
                 score=hit.score,
-                metadata=p.get("metadata", {}),
+                title=p.get("title"),
             ))
 
         logger.info("ticket_lookup: found %d chunks for query=%r team=%s", len(chunks), query, team_id)

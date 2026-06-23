@@ -56,7 +56,7 @@ async def run_confluence_search(query: str, team_id: str) -> list[RetrievedChunk
                 source=p.get("source", ""),
                 source_type="confluence",
                 score=hit.score,
-                metadata=p.get("metadata", {}),
+                title=p.get("title"),
             ))
 
         logger.info("confluence_search: found %d chunks for query=%r team=%s", len(chunks), query, team_id)

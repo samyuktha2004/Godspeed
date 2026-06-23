@@ -16,12 +16,13 @@ export interface ExecutionPlan {
 }
 
 export interface RetrievedChunk {
-  chunk_id:       string
-  text:           string
-  source:         string
-  source_type:    string
-  score:          number
+  chunk_id:        string
+  text:            string
+  source:          string
+  source_type:     string
+  score:           number
   reranker_score?: number
+  title?:          string
 }
 
 export interface AgentResult {

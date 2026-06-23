@@ -1,7 +1,7 @@
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { useAuth } from '@/hooks/useAuth'
 import { useUIStore } from '@/stores/uiStore'
 import { env } from '@/config/env'
@@ -31,7 +31,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
+    <div className="flex min-h-screen flex-col items-center justify-center px-4 py-12">
       <form
         onSubmit={handleSubmit(onSubmit)}
         className="flex w-full max-w-sm flex-col gap-4 rounded-xl border border-surface-subtle p-8 shadow-sm"
@@ -89,6 +89,13 @@ export default function LoginPage() {
           Sign in with Google
         </a>
       </form>
+
+      <p className="mt-4 text-center text-sm text-stone-500">
+        New to Godspeed?{' '}
+        <Link to="/register" className="font-medium text-brand hover:underline">
+          Create a workspace
+        </Link>
+      </p>
     </div>
   )
 }

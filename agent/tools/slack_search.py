@@ -72,7 +72,7 @@ async def run_slack_search(query: str, team_id: str) -> list[RetrievedChunk]:
                         source=link,
                         source_type="slack",
                         score=1.0,
-                        metadata={"channel": ch_name, "channel_id": ch_id, "user": user, "ts": ts},
+                        title=f"#{ch_name}",
                     ))
                     if len(chunks) >= 10:
                         break

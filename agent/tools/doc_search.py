@@ -283,6 +283,7 @@ async def run_doc_search(
                 source_type=p.get("source_type", "internal"),
                 score=cand["rrf_score"],
                 reranker_score=cand["reranker_score"],
+                title=p.get("title"),
             )
         )
 
