@@ -4,9 +4,10 @@ import { useUIStore } from '@/stores/uiStore'
 import { useAuthStore } from '@/stores/authStore'
 import { ToastStack } from '@/components/common/Toast'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
+import { ErrorBoundary } from '@/components/common/ErrorBoundary'
 import { NavBar } from '@/components/common/NavBar'
 import { Sidebar } from '@/components/common/Sidebar'
-import { cn, isAdmin } from '@/lib/utils'
+import { cn, isOwner } from '@/lib/utils'
 import { env } from '@/config/env'
 
 const SHELL_FREE_ROUTES = new Set(['/login', '/register', '/auth/callback', '/accept-invite', '/setup'])
@@ -43,9 +44,9 @@ export default function App() {
       })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Redirect org_admin to setup wizard on first login
+  // Redirect workspace owner to setup wizard on first login
   useEffect(() => {
-    if (user && isAdmin(user) && !setupComplete && !SHELL_FREE_ROUTES.has(pathname)) {
+    if (user && isOwner(user) && !setupComplete && !SHELL_FREE_ROUTES.has(pathname)) {
       navigate({ to: '/setup' })
     }
   }, [user, setupComplete, pathname]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -85,9 +86,11 @@ export default function App() {
           !shellFree && (sidebarOpen ? 'lg:ml-60' : 'lg:ml-14'),
         )}
       >
-        <Suspense fallback={<div className="p-8"><LoadingSkeleton rows={5} /></div>}>
-          <Outlet />
-        </Suspense>
+        <ErrorBoundary>
+          <Suspense fallback={<div className="p-8"><LoadingSkeleton rows={5} /></div>}>
+            <Outlet />
+          </Suspense>
+        </ErrorBoundary>
       </main>
 
       <ToastStack />

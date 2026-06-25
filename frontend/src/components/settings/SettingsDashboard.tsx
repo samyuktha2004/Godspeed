@@ -4,13 +4,15 @@ import { Tabs, TabPanel } from '@/components/common/Tabs'
 import { SettingsProfile } from './SettingsProfile'
 import { SettingsPreferences } from './SettingsPreferences'
 import { SettingsApiKeys } from './SettingsApiKeys'
+import { SettingsPrivacy } from './SettingsPrivacy'
 
-type SettingsTab = 'profile' | 'preferences' | 'api-keys'
+type SettingsTab = 'profile' | 'preferences' | 'api-keys' | 'privacy'
 
 const TABS = [
-  { id: 'profile'     as const, label: 'Profile'      },
-  { id: 'preferences' as const, label: 'Preferences'  },
-  { id: 'api-keys'    as const, label: 'API Keys'      },
+  { id: 'profile'     as const, label: 'Profile'          },
+  { id: 'preferences' as const, label: 'Preferences'      },
+  { id: 'api-keys'    as const, label: 'API Keys'          },
+  { id: 'privacy'     as const, label: 'Privacy & Data'   },
 ]
 
 export function SettingsDashboard() {
@@ -36,6 +38,7 @@ export function SettingsDashboard() {
         <TabPanel id="profile"     active={tab}><SettingsProfile /></TabPanel>
         <TabPanel id="preferences" active={tab}><SettingsPreferences /></TabPanel>
         <TabPanel id="api-keys"    active={tab}><SettingsApiKeys /></TabPanel>
+        <TabPanel id="privacy"     active={tab}><SettingsPrivacy /></TabPanel>
       </div>
     </div>
   )

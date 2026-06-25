@@ -1,4 +1,4 @@
-import { Component, type ReactNode } from 'react'
+import { Component, type ReactNode, type ErrorInfo } from 'react'
 
 interface Props   { children: ReactNode }
 interface State   { error: Error | null }
@@ -8,6 +8,10 @@ export class ErrorBoundary extends Component<Props, State> {
 
   static getDerivedStateFromError(error: Error): State {
     return { error }
+  }
+
+  override componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[ErrorBoundary]', error, info.componentStack)
   }
 
   override render() {
@@ -20,12 +24,20 @@ export class ErrorBoundary extends Component<Props, State> {
           <p className="max-w-md text-sm text-stone-500">
             {this.state.error.message}
           </p>
-          <button
-            className="rounded bg-brand px-4 py-2 text-sm text-white hover:bg-brand-dark"
-            onClick={() => this.setState({ error: null })}
-          >
-            Try again
-          </button>
+          <div className="flex gap-3">
+            <button
+              className="rounded bg-brand px-4 py-2 text-sm text-white hover:bg-brand-dark"
+              onClick={() => this.setState({ error: null })}
+            >
+              Try again
+            </button>
+            <a
+              href="/"
+              className="rounded border border-stone-300 bg-white px-4 py-2 text-sm text-stone-700 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-800 dark:text-stone-200"
+            >
+              Go home
+            </a>
+          </div>
         </div>
       )
     }

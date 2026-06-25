@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -13,6 +14,50 @@ from ingestion.models import IngestJobRecord, IngestJobStatus, IngestSourcePaylo
 logger = logging.getLogger(__name__)
 
 _SOURCE_REGISTRY: dict[str, Any] = {}
+
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s{2,}")
+
+
+class _JiraSourceWrapper:
+    """Delegates to src.jira_agent.adapter.JiraAdapter — single source of truth for Jira HTTP logic."""
+
+    def __init__(self, team_id: str, project_key: str = "", lookback_days: int = 30, **_) -> None:
+        from src.jira_agent.adapter import JiraAdapter
+        self._adapter = JiraAdapter(team_id=team_id)
+        self._project_key = project_key
+        self._lookback_days = lookback_days
+
+    async def fetch(self) -> list:
+        from datetime import timedelta
+        if not self._project_key:
+            return []
+        since = datetime.utcnow() - timedelta(days=self._lookback_days)
+        return await self._adapter.fetch_incremental(self._project_key, since)
+
+
+class _ConfluenceSourceWrapper:
+    """Delegates to src.confluence_agent.adapter.ConfluenceAdapter.
+    Strips HTML before returning so the generic NLP chunker receives plain text.
+    """
+
+    def __init__(self, team_id: str, space_key: str = "", page_ids: list | None = None, **_) -> None:
+        from src.confluence_agent.adapter import ConfluenceAdapter
+        self._adapter = ConfluenceAdapter(team_id=team_id)
+        self._space_key = space_key
+        self._page_ids = page_ids
+
+    async def fetch(self) -> list:
+        if self._page_ids:
+            docs = [await self._adapter.fetch_page(pid) for pid in self._page_ids]
+            docs = [d for d in docs if d is not None]
+        elif self._space_key:
+            docs = await self._adapter.fetch_space(self._space_key)
+        else:
+            return []
+        for doc in docs:
+            doc.content = _WS_RE.sub(" ", _TAG_RE.sub(" ", doc.content)).strip()
+        return docs
 
 
 async def _run_graph_pipeline(embedded, doc) -> None:
@@ -37,17 +82,15 @@ async def _run_graph_pipeline(embedded, doc) -> None:
 
 def _get_source_registry() -> dict[str, Any]:
     if not _SOURCE_REGISTRY:
-        from ingestion.sources.confluence import ConfluenceSource
         from ingestion.sources.github import GithubSource
-        from ingestion.sources.jira import JiraSource
         from ingestion.sources.pdf import PDFSource
 
         _SOURCE_REGISTRY.update(
             {
-                "confluence": ConfluenceSource,
+                "confluence": _ConfluenceSourceWrapper,
                 "github": GithubSource,
                 "pdf": PDFSource,
-                "jira": JiraSource,
+                "jira": _JiraSourceWrapper,
             }
         )
     return _SOURCE_REGISTRY

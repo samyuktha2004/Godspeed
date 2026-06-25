@@ -11,7 +11,7 @@ from graph_store.api import router as graph_router
 from graph_store.stream import router as graph_stream_router
 from ingestion.api import router as ingestion_router
 from src.confluence_agent.router import router as confluence_router
-from toolsforgitnotionslack.router import router as tools_router
+from tools.router import router as tools_router
 from src.file_agent.router import router as file_router
 from src.jira_agent.router import router as jira_router
 from src.utils.middleware import RequestLoggingMiddleware

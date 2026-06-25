@@ -12,19 +12,14 @@ const STARTER_QUERIES: Record<User['role'], string[]> = {
     'Which services depend on the payments API?',
   ],
   manager: [
-    'What did the platform team ship last sprint?',
-    'Show me open Jira issues blocking the Q3 release.',
-    'Which engineers are on-call this week?',
+    'What are the open blockers across this sprint?',
+    'Summarise last sprint's retro action items.',
+    'Which services does the payments team depend on?',
   ],
   admin: [
     'How do I add a new data source?',
-    'What is the current knowledge graph coverage?',
-    'Show me recent failed queries.',
-  ],
-  org_admin: [
     'How do I invite team members?',
-    'What sources are currently indexed?',
-    'How do I configure RBAC channels?',
+    'What is the current knowledge graph coverage?',
   ],
 }
 

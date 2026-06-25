@@ -5,6 +5,8 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/http'
 import { useUIStore } from '@/stores/uiStore'
+import { useAuth } from '@/hooks/useAuth'
+import { isOwner } from '@/lib/utils'
 import type { WorkspaceSettings } from '@/types/settings'
 
 const schema = z.object({
@@ -35,6 +37,8 @@ const INPUT  = 'block w-full rounded border border-surface-subtle bg-white px-3 
 
 export function AdminWorkspaceSettings() {
   const addToast = useUIStore((s) => s.addToast)
+  const { user }  = useAuth()
+  const canDelete = isOwner(user)
 
   const { data: workspace } = useQuery({
     queryKey: ['admin-workspace'],
@@ -105,23 +109,25 @@ export function AdminWorkspaceSettings() {
         </button>
       </div>
 
-      {/* Danger zone */}
-      <div className="flex flex-col gap-3 rounded-xl border border-red-200 p-4 dark:border-red-900">
-        <p className="text-sm font-semibold text-red-700 dark:text-red-400">Danger zone</p>
-        <div>
-          <p className="text-sm font-medium text-stone-700 dark:text-stone-300">Delete this workspace</p>
-          <p className="mt-0.5 text-xs text-stone-500">
-            Permanently deletes all data, users, and documents. This cannot be undone.
-          </p>
-          <button
-            type="button"
-            className="mt-3 rounded-lg bg-red-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-red-700"
-            onClick={() => window.confirm('Delete this workspace? This cannot be undone.') && addToast({ type: 'error', message: 'Workspace deletion is disabled in this environment.' })}
-          >
-            Delete workspace
-          </button>
+      {/* Danger zone — workspace owner only */}
+      {canDelete && (
+        <div className="flex flex-col gap-3 rounded-xl border border-red-200 p-4 dark:border-red-900">
+          <p className="text-sm font-semibold text-red-700 dark:text-red-400">Danger zone</p>
+          <div>
+            <p className="text-sm font-medium text-stone-700 dark:text-stone-300">Delete this workspace</p>
+            <p className="mt-0.5 text-xs text-stone-500">
+              Permanently deletes all data, users, and documents. This cannot be undone.
+            </p>
+            <button
+              type="button"
+              className="mt-3 rounded-lg bg-red-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-red-700"
+              onClick={() => window.confirm('Delete this workspace? This cannot be undone.') && addToast({ type: 'error', message: 'Workspace deletion is disabled in this environment.' })}
+            >
+              Delete workspace
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </form>
   )
 }

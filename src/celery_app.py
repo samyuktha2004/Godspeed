@@ -1,4 +1,10 @@
-"""Celery app configuration and task setup."""
+"""
+Authoritative Celery application for Godspeed.
+
+All task modules must register on this app. ingestion/jobs/celery_app.py
+re-exports this app so that existing imports keep working — do not create
+a second Celery() instance anywhere else.
+"""
 
 import logging
 
@@ -8,8 +14,17 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Create Celery app
-app = Celery(settings.app_name)
+# Create Celery app — single authoritative instance
+app = Celery(
+    settings.app_name,
+    include=[
+        "ingestion.jobs.ingest_job",
+        "ingestion.jobs.cag_job",
+        "src.jira_agent.tasks",
+        "src.confluence_agent.tasks",
+        "src.file_agent.tasks",
+    ],
+)
 
 # Configure from settings
 app.conf.update(
@@ -112,6 +127,20 @@ def setup_periodic_tasks(sender, **kwargs):
         name="compute-dependency-risk",
     )
 
+    # CAG (content-addressed generation) nightly at 02:00 UTC
+    sender.add_periodic_task(
+        crontab(hour=2, minute=0),
+        _cag_run_stub.s(),
+        name="cag-nightly",
+    )
+
+    # Confluence incremental sync — every hour
+    sender.add_periodic_task(
+        crontab(minute=0),
+        _confluence_periodic_sync_stub.s(),
+        name="confluence-periodic-sync",
+    )
+
 
 # Task imports (to be implemented in tasks module)
 from celery import shared_task
@@ -190,6 +219,28 @@ def compute_dependency_risk(self):
     except Exception as exc:
         logger.error("compute_dependency_risk failed: %s", exc)
         raise self.retry(exc=exc, countdown=300)
+
+
+@shared_task(queue="low", bind=True, max_retries=2)
+def _cag_run_stub(self):
+    """Beat entry-point — delegates to the real CAG task in ingestion.jobs.cag_job."""
+    try:
+        from ingestion.jobs.cag_job import run_cag
+        run_cag.delay()
+    except Exception as exc:
+        logger.error("_cag_run_stub failed: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
+
+
+@shared_task(queue="polling", bind=True, max_retries=2)
+def _confluence_periodic_sync_stub(self):
+    """Beat entry-point — delegates to the real periodic sync task."""
+    try:
+        from src.confluence_agent.tasks import confluence_periodic_sync
+        confluence_periodic_sync.delay()
+    except Exception as exc:
+        logger.error("_confluence_periodic_sync_stub failed: %s", exc)
+        raise self.retry(exc=exc, countdown=120)
 
 
 if __name__ == "__main__":

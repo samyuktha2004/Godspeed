@@ -8,7 +8,7 @@ import { lazy } from 'react'
 
 import App from '@/App'
 import { useAuthStore } from '@/stores/authStore'
-import { isAdmin } from '@/lib/utils'
+import { isAdmin, isOwner } from '@/lib/utils'
 
 const Home          = lazy(() => import('@/pages/Home'))
 const QueryPage     = lazy(() => import('@/pages/QueryPage'))
@@ -21,6 +21,8 @@ const Register      = lazy(() => import('@/pages/RegisterPage'))
 const Setup         = lazy(() => import('@/pages/SetupPage'))
 const OAuthCallback = lazy(() => import('@/pages/OAuthCallbackPage'))
 const AcceptInvite  = lazy(() => import('@/pages/AcceptInvitePage'))
+const PrivacyPolicy = lazy(() => import('@/pages/PrivacyPolicyPage'))
+const Terms         = lazy(() => import('@/pages/TermsPage'))
 const NotFound      = lazy(() => import('@/pages/NotFoundPage'))
 
 const requireAuth = () => {
@@ -32,6 +34,13 @@ const requireAuth = () => {
 const requireAdmin = () => {
   requireAuth()
   if (!isAdmin(useAuthStore.getState().user)) {
+    throw redirect({ to: '/' })
+  }
+}
+
+const requireOwner = () => {
+  requireAuth()
+  if (!isOwner(useAuthStore.getState().user)) {
     throw redirect({ to: '/' })
   }
 }
@@ -113,7 +122,7 @@ export const registerRoute = createRoute({
 export const setupRoute = createRoute({
   getParentRoute: () => rootRoute,
   path:           '/setup',
-  beforeLoad:     requireAuth,
+  beforeLoad:     requireOwner,
   component:      Setup,
 })
 
@@ -124,6 +133,18 @@ export const acceptInviteRoute = createRoute({
   validateSearch: (s: Record<string, unknown>) => ({
     token: typeof s.token === 'string' ? s.token : '',
   }),
+})
+
+export const privacyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path:           '/privacy',
+  component:      PrivacyPolicy,
+})
+
+export const termsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path:           '/terms',
+  component:      Terms,
 })
 
 export const notFoundRoute = createRoute({
@@ -144,6 +165,8 @@ const routeTree = rootRoute.addChildren([
   adminRoute,
   workspaceRoute,
   settingsRoute,
+  privacyRoute,
+  termsRoute,
   notFoundRoute,
 ])
 

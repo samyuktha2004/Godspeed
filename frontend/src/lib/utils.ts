@@ -7,5 +7,9 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function isAdmin(user: User | null | undefined): boolean {
-  return user?.role === 'admin' || user?.role === 'org_admin'
+  return user?.role === 'admin'
+}
+
+export function isOwner(user: User | null | undefined): boolean {
+  return user?.is_owner === true
 }

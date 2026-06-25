@@ -42,7 +42,7 @@ async function fetchSources(): Promise<{ sources: DataSource[] }> {
 export function AdminDashboard() {
   const [tab, setTab] = useState<Tab>('overview')
 
-  const { data } = useQuery({
+  const { data, isError } = useQuery({
     queryKey:  ['admin-data-sources'],
     queryFn:   fetchSources,
     staleTime: 60_000,
@@ -64,7 +64,9 @@ export function AdminDashboard() {
 
           <div className="rounded-xl border border-surface-subtle p-5">
             <p className="mb-4 text-sm font-medium text-stone-500">Sync Controls</p>
-            {syncableSources.length === 0 ? (
+            {isError ? (
+              <p className="text-sm text-red-500">Failed to load data sources — check your connection and try again.</p>
+            ) : syncableSources.length === 0 ? (
               <p className="text-sm text-stone-400">
                 No enabled Jira or Confluence sources. Configure them in the Data Sources tab.
               </p>

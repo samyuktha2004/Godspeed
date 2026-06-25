@@ -169,7 +169,7 @@ async def query_endpoint(
 ) -> StreamingResponse:
     # Enforce server-side team_id and channel IDs — never trust the client body.
     # Admins bypass RBAC channel filtering so they can search the full knowledge base.
-    is_admin = user.get("role") in ("admin", "org_admin")
+    is_admin = user.get("role") == "admin"
     query_input = query_input.model_copy(update={
         "team_id":             user.get("team_id", query_input.team_id),
         "allowed_channel_ids": [] if is_admin else user.get("allowed_channel_ids", []),

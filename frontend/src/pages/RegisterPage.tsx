@@ -6,7 +6,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useUIStore } from '@/stores/uiStore'
 import { env } from '@/config/env'
 import type { User } from '@/types/user'
-import { isAdmin } from '@/lib/utils'
+import { isOwner } from '@/lib/utils'
 
 const schema = z.object({
   company_name: z.string().min(2, 'Company name is required'),
@@ -68,8 +68,8 @@ export default function RegisterPage() {
     const { user }: { user: User } = await res.json()
     login(user)
     addToast({ type: 'success', message: `Welcome, ${user.name}!` })
-    // org_admin goes to setup wizard; other roles (shouldn't happen on register) go home
-    navigate({ to: isAdmin(user) ? '/setup' : '/' })
+    // owner goes to setup wizard after registration
+    navigate({ to: isOwner(user) ? '/setup' : '/' })
   }
 
   return (
@@ -133,6 +133,21 @@ export default function RegisterPage() {
               className={INPUT_CLASS}
             />
           </Field>
+
+          {/* DPDPA §5 notice — presented before the consent act (clicking "Create workspace") */}
+          <div className="rounded-md border border-surface-subtle bg-stone-50 p-3 text-xs text-stone-500 leading-relaxed dark:bg-stone-800 dark:text-stone-400">
+            <p className="mb-1 font-medium text-stone-700 dark:text-stone-300">Before you continue</p>
+            Godspeed collects your name, work email, and company name to create and operate your workspace.
+            Your data is processed to provide the service, send transactional emails, and maintain security logs.
+            It is not sold to third parties. You may request access, correction, or erasure of your data at any
+            time from{' '}
+            <span className="font-medium">Settings → Privacy & Data</span>.
+            By clicking "Create workspace" you acknowledge this notice and consent to processing under
+            India's{' '}
+            <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">DPDPA-compliant Privacy Policy</a>
+            {' '}and our{' '}
+            <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">Terms of Service</a>.
+          </div>
 
           <button
             type="submit"

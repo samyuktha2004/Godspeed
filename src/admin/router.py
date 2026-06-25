@@ -128,7 +128,7 @@ async def update_source_sync_status(
 # ---------------------------------------------------------------------------
 
 @router.get("/data-sources")
-async def list_data_sources(user=Depends(require_role("admin", "org_admin"))) -> dict:
+async def list_data_sources(user=Depends(require_role("admin"))) -> dict:
     return {"sources": await _load_sources()}
 
 
@@ -140,7 +140,7 @@ class PatchSourceBody(BaseModel):
 async def patch_data_source(
     source_id: str,
     body: PatchSourceBody,
-    user=Depends(require_role("admin", "org_admin")),
+    user=Depends(require_role("admin")),
 ) -> dict:
     sources = await _load_sources()
     for src in sources:

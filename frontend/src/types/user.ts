@@ -1,4 +1,4 @@
-export type Role = 'engineer' | 'manager' | 'admin' | 'org_admin'
+export type Role = 'engineer' | 'manager' | 'admin'
 
 export interface Team {
   id:   string
@@ -10,6 +10,7 @@ export interface User {
   email:               string
   name:                string
   role:                Role
+  is_owner?:           boolean
   team_id:             string
   team?:               Team
   is_new_hire:         boolean

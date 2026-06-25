@@ -11,11 +11,11 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from toolsforgitnotionslack.agent.cache import Cache
-from toolsforgitnotionslack.agent.planner import build_system_prompt
-from toolsforgitnotionslack.tools.github_tools import GITHUB_TOOLS, GITHUB_TOOL_FNS
-from toolsforgitnotionslack.tools.notion_tools import NOTION_TOOLS, NOTION_TOOL_FNS
-from toolsforgitnotionslack.tools.slack_tools import SLACK_TOOLS, SLACK_TOOL_FNS
+from tools.agent.cache import Cache
+from tools.agent.planner import build_system_prompt
+from tools.tools.github_tools import GITHUB_TOOLS, GITHUB_TOOL_FNS
+from tools.tools.notion_tools import NOTION_TOOLS, NOTION_TOOL_FNS
+from tools.tools.slack_tools import SLACK_TOOLS, SLACK_TOOL_FNS
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tools", tags=["tools"])

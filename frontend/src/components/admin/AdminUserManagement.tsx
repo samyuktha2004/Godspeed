@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/http'
+import { useAuth } from '@/hooks/useAuth'
+import { isOwner } from '@/lib/utils'
+import { useUIStore } from '@/stores/uiStore'
 import { UserInvite } from '@/types/settings'
 import { LoadingSkeleton } from '../common/LoadingSkeleton'
 
@@ -9,11 +12,15 @@ interface WorkspaceUser {
   email: string
   name: string
   role: string
+  is_owner: boolean
   is_active: boolean
 }
 
 export function AdminUserManagement() {
   const qc = useQueryClient()
+  const addToast = useUIStore((s) => s.addToast)
+  const { user: currentUser } = useAuth()
+  const canManageOwners = isOwner(currentUser)
   const [showAddForm, setShowAddForm] = useState(false)
   const [formData, setFormData] = useState<UserInvite>({ email: '', name: '', role: 'engineer' })
   const [inviteLink, setInviteLink] = useState<{ url: string; emailSent: boolean } | null>(null)
@@ -59,6 +66,25 @@ export function AdminUserManagement() {
       if (!res.ok) throw new Error(`Error ${res.status}`)
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['workspace-users'] }),
+  })
+
+  const { mutate: setOwnerStatus } = useMutation({
+    mutationFn: async ({ userId, is_owner }: { userId: string; is_owner: boolean }) => {
+      const res = await apiFetch(`/api/workspace/users/${userId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_owner }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error((body as { detail?: string }).detail ?? `Error ${res.status}`)
+      }
+    },
+    onSuccess: (_data, { is_owner }) => {
+      addToast({ type: 'success', message: is_owner ? 'Owner status granted.' : 'Owner status revoked.' })
+      qc.invalidateQueries({ queryKey: ['workspace-users'] })
+    },
+    onError: (err: Error) => setError(err.message),
   })
 
   const handleInvite = () => {
@@ -118,7 +144,6 @@ export function AdminUserManagement() {
                 <option value="engineer">Engineer</option>
                 <option value="manager">Manager</option>
                 <option value="admin">Admin</option>
-                <option value="org_admin">Org Admin</option>
               </select>
             </div>
           </div>
@@ -193,9 +218,16 @@ export function AdminUserManagement() {
                     <td className="px-4 py-3 font-medium text-stone-900 dark:text-white">{u.name}</td>
                     <td className="px-4 py-3 text-stone-600 dark:text-stone-400">{u.email}</td>
                     <td className="px-4 py-3">
-                      <span className="rounded-full bg-stone-200 px-2 py-0.5 text-xs font-medium text-stone-700 dark:bg-stone-700 dark:text-stone-300">
-                        {u.role}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="rounded-full bg-stone-200 px-2 py-0.5 text-xs font-medium text-stone-700 dark:bg-stone-700 dark:text-stone-300">
+                          {u.role}
+                        </span>
+                        {u.is_owner && (
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                            owner
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -207,14 +239,55 @@ export function AdminUserManagement() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => {
-                          if (confirm(`Remove ${u.name} from workspace?`)) removeUser(u.id)
-                        }}
-                        className="text-xs font-medium text-stone-500 hover:text-red-600"
-                      >
-                        Remove
-                      </button>
+                      {u.id === currentUser?.id ? (
+                        canManageOwners && (
+                          <button
+                            onClick={() => {
+                              if (confirm('Relinquish your owner status? Another owner must already exist.'))
+                                setOwnerStatus({ userId: u.id, is_owner: false })
+                            }}
+                            className="text-xs font-medium text-stone-400 hover:text-amber-600"
+                          >
+                            Step down as owner
+                          </button>
+                        )
+                      ) : (
+                        <div className="flex items-center justify-end gap-3">
+                          {canManageOwners && u.role === 'admin' && (
+                            u.is_owner ? (
+                              <button
+                                onClick={() => {
+                                  if (confirm(`Revoke owner status from ${u.name}?`))
+                                    setOwnerStatus({ userId: u.id, is_owner: false })
+                                }}
+                                className="text-xs font-medium text-stone-500 hover:text-amber-600"
+                              >
+                                Revoke owner
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  if (confirm(`Grant owner status to ${u.name}?`))
+                                    setOwnerStatus({ userId: u.id, is_owner: true })
+                                }}
+                                className="text-xs font-medium text-stone-500 hover:text-brand"
+                              >
+                                Make owner
+                              </button>
+                            )
+                          )}
+                          {(canManageOwners || !u.is_owner) && (
+                            <button
+                              onClick={() => {
+                                if (confirm(`Remove ${u.name} from workspace?`)) removeUser(u.id)
+                              }}
+                              className="text-xs font-medium text-stone-500 hover:text-red-600"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

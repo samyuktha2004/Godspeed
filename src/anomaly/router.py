@@ -24,7 +24,7 @@ async def list_signals(
 ) -> dict:
     # Non-admin users are scoped to their own team only
     effective_team = team_id
-    if user.get("role") not in ("admin", "org_admin"):
+    if user.get("role") != "admin":
         effective_team = user.get("team_id")
 
     from src.anomaly.db import get_signals
@@ -54,7 +54,7 @@ async def signals_summary(
 @router.patch("/signals/{signal_id}/resolve")
 async def resolve_signal(
     signal_id: str,
-    user: dict = Depends(require_role("admin", "org_admin")),
+    user: dict = Depends(require_role("admin")),
 ) -> dict:
     from src.anomaly.db import resolve_signal
     ok = resolve_signal(signal_id, resolver_user_id=user["id"])
@@ -73,7 +73,7 @@ async def query_patterns(
     from src.anomaly.db import get_hourly_counts, get_signals
 
     effective_team = team_id
-    if user.get("role") not in ("admin", "org_admin"):
+    if user.get("role") != "admin":
         effective_team = user.get("team_id") or team_id
 
     if not effective_team:
