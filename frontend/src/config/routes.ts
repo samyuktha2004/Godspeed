@@ -8,9 +8,10 @@ import { lazy } from 'react'
 
 import App from '@/App'
 import { useAuthStore } from '@/stores/authStore'
-import { isAdmin, isOwner } from '@/lib/utils'
+import { isAdmin, isManager, isOwner } from '@/lib/utils'
 
 const Home          = lazy(() => import('@/pages/Home'))
+const TeamPage      = lazy(() => import('@/pages/TeamPage'))
 const QueryPage     = lazy(() => import('@/pages/QueryPage'))
 const Analytics     = lazy(() => import('@/pages/AnalyticsPage'))
 const Admin         = lazy(() => import('@/pages/AdminPage'))
@@ -41,6 +42,14 @@ const requireAdmin = () => {
 const requireOwner = () => {
   requireAuth()
   if (!isOwner(useAuthStore.getState().user)) {
+    throw redirect({ to: '/' })
+  }
+}
+
+const requireManager = () => {
+  requireAuth()
+  const user = useAuthStore.getState().user
+  if (!isAdmin(user) && !isManager(user)) {
     throw redirect({ to: '/' })
   }
 }
@@ -94,6 +103,13 @@ export const adminRoute = createRoute({
   path: '/admin',
   beforeLoad:     requireAdmin,
   component:      Admin,
+})
+
+export const teamRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path:           '/team',
+  beforeLoad:     requireManager,
+  component:      TeamPage,
 })
 
 export const workspaceRoute = createRoute({
@@ -163,6 +179,7 @@ const routeTree = rootRoute.addChildren([
   queryRoute,
   analyticsRoute,
   adminRoute,
+  teamRoute,
   workspaceRoute,
   settingsRoute,
   privacyRoute,

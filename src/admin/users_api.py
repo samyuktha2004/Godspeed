@@ -9,7 +9,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from src.auth.deps import require_role
+from src.auth.deps import get_current_user, require_role
 
 logger = logging.getLogger(__name__)
 
@@ -47,17 +47,22 @@ class PatchUserBody(BaseModel):
 
 
 @router.get("/users")
-async def list_users(user=Depends(require_role("admin"))) -> dict:
-    """List all users in the default workspace."""
+async def list_users(user=Depends(require_role("admin", "manager"))) -> dict:
+    """List users in the workspace.
+
+    Admins see everyone. Managers see only their own team.
+    """
     try:
-        result = (
+        q = (
             _client()
             .table("users")
-            .select("id, email, name, role, is_owner, is_active")
+            .select("id, email, name, role, is_owner, is_active, team_id")
             .eq("workspace_id", DEFAULT_WORKSPACE_ID)
             .order("name")
-            .execute()
         )
+        if user.get("role") == "manager":
+            q = q.eq("team_id", user["team_id"])
+        result = q.execute()
         return {"users": result.data}
     except Exception:
         logger.exception("admin: list_users failed")
@@ -262,17 +267,22 @@ class PatchChannelBody(BaseModel):
 
 
 @router.get("/channels")
-async def list_channels(user=Depends(require_role("admin"))) -> dict:
-    """List all channels in the default workspace."""
+async def list_channels(user=Depends(require_role("admin", "manager"))) -> dict:
+    """List channels in the workspace.
+
+    Admins see all channels. Managers see only channels belonging to their team.
+    """
     try:
-        result = (
+        q = (
             _client()
             .table("channels")
             .select("id, name, team_id, source_type, sensitivity, workspace_id")
             .eq("workspace_id", DEFAULT_WORKSPACE_ID)
             .order("name")
-            .execute()
         )
+        if user.get("role") == "manager":
+            q = q.eq("team_id", user["team_id"])
+        result = q.execute()
         return {"channels": result.data}
     except Exception:
         logger.exception("admin: list_channels failed")
@@ -305,12 +315,34 @@ async def create_channel(body: CreateChannelBody, user=Depends(require_role("adm
 async def patch_channel(
     channel_id: str,
     body: PatchChannelBody,
-    user=Depends(require_role("admin")),
+    user=Depends(require_role("admin", "manager")),
 ) -> dict:
-    """Update name or sensitivity for a channel."""
+    """Update name or sensitivity for a channel.
+
+    Managers may only edit channels that belong to their own team.
+    """
     updates = body.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+
+    if user.get("role") == "manager":
+        try:
+            check = (
+                _client()
+                .table("channels")
+                .select("team_id")
+                .eq("id", channel_id)
+                .eq("workspace_id", DEFAULT_WORKSPACE_ID)
+                .limit(1)
+                .execute()
+            )
+        except Exception:
+            logger.exception("manager: patch_channel team-check failed for %s", channel_id)
+            raise HTTPException(status_code=500, detail="Failed to validate channel")
+        if not check.data:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        if check.data[0].get("team_id") != user.get("team_id"):
+            raise HTTPException(status_code=403, detail="Cannot edit channels outside your team")
 
     try:
         result = (

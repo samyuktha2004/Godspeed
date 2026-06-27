@@ -141,6 +141,13 @@ def setup_periodic_tasks(sender, **kwargs):
         name="confluence-periodic-sync",
     )
 
+    # New-hire graduation — daily at 01:00 UTC
+    sender.add_periodic_task(
+        crontab(hour=1, minute=0),
+        clear_expired_new_hires.s(),
+        name="clear-expired-new-hires",
+    )
+
 
 # Task imports (to be implemented in tasks module)
 from celery import shared_task
@@ -241,6 +248,29 @@ def _confluence_periodic_sync_stub(self):
     except Exception as exc:
         logger.error("_confluence_periodic_sync_stub failed: %s", exc)
         raise self.retry(exc=exc, countdown=120)
+
+
+@shared_task(queue="low", bind=True, max_retries=2)
+def clear_expired_new_hires(self):
+    """Daily job to clear is_new_hire=True for users whose new_hire_until date has passed (01:00 UTC)."""
+    try:
+        from datetime import date
+        from src.auth.db import _client as _sb_client
+
+        today = date.today().isoformat()
+        sb    = _sb_client()
+        result = (
+            sb.table("users")
+            .update({"is_new_hire": False})
+            .eq("is_new_hire", True)
+            .lt("new_hire_until", today)
+            .execute()
+        )
+        count = len(result.data) if result.data else 0
+        logger.info("clear_expired_new_hires: graduated %d user(s)", count)
+    except Exception as exc:
+        logger.error("clear_expired_new_hires failed: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
 
 
 if __name__ == "__main__":

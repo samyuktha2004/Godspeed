@@ -19,6 +19,7 @@ import { GraphNodeDetailPanel } from '@/components/results/GraphNodeDetailPanel'
 import { QueryFeedback } from '@/components/results/QueryFeedback'
 import { ShareResults } from '@/components/results/ShareResults'
 import { NoResultsState } from '@/components/common/NoResultsState'
+import { RBACRestrictedBanner } from '@/components/common/RBACRestrictedBanner'
 import { cn } from '@/lib/utils'
 import type {
   AgentTask, RetrievedChunk, GuardrailResult, ExecutionPlan,
@@ -70,6 +71,7 @@ export function ResultsPage() {
   const [answerText, setAnswerText]   = useState('')
   const [citations, setCitations]     = useState<RetrievedChunk[]>([])
   const [guardrail, setGuardrail]     = useState<GuardrailResult | null>(null)
+  const [channelFilterApplied, setChannelFilterApplied] = useState(false)
   const [currentQuery, setCurrentQuery] = useState('')
   const [queryId, setQueryId]           = useState('')
   const [shareOpen, setShareOpen]       = useState(false)
@@ -152,6 +154,7 @@ export function ResultsPage() {
       setAnswerText('')
       setCitations([])
       setGuardrail(null)
+      setChannelFilterApplied(false)
       setCurrentQuery(query)
       setQueryId(crypto.randomUUID())
       setShareOpen(false)
@@ -185,9 +188,10 @@ export function ResultsPage() {
               },
             }))
           },
-          citations: ({ chunks }) => {
+          citations: ({ chunks, channel_filter_applied }) => {
             citationsRef.current = chunks
             setCitations(chunks)
+            if (channel_filter_applied) setChannelFilterApplied(true)
           },
           answer_chunk: ({ chunk }) => {
             answerTextRef.current += chunk
@@ -415,6 +419,10 @@ export function ResultsPage() {
                         Retry
                       </button>
                     </div>
+                  )}
+
+                  {channelFilterApplied && isComplete && (
+                    <RBACRestrictedBanner />
                   )}
 
                   {citations.length > 0 && <Citations chunks={citations} />}

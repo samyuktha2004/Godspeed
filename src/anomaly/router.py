@@ -48,16 +48,23 @@ async def signals_summary(
     user: dict = Depends(get_current_user),
 ) -> dict:
     from src.anomaly.db import get_signals_summary
-    return get_signals_summary()
+    team_id = None if user.get("role") == "admin" else user.get("team_id")
+    return get_signals_summary(team_id=team_id)
 
 
 @router.patch("/signals/{signal_id}/resolve")
 async def resolve_signal(
     signal_id: str,
-    user: dict = Depends(require_role("admin")),
+    user: dict = Depends(require_role("admin", "manager")),
 ) -> dict:
-    from src.anomaly.db import resolve_signal
-    ok = resolve_signal(signal_id, resolver_user_id=user["id"])
+    from src.anomaly.db import get_signal_by_id, resolve_signal as _resolve
+    if user.get("role") == "manager":
+        signal = get_signal_by_id(signal_id)
+        if not signal:
+            raise HTTPException(status_code=404, detail="Signal not found or already resolved")
+        if signal.get("team_id") != user.get("team_id"):
+            raise HTTPException(status_code=403, detail="Cannot resolve signals outside your team")
+    ok = _resolve(signal_id, resolver_user_id=user["id"])
     if not ok:
         raise HTTPException(status_code=404, detail="Signal not found or already resolved")
     return {"ok": True}
@@ -122,7 +129,8 @@ async def staleness_list(
     user: dict = Depends(get_current_user),
 ) -> dict:
     from src.anomaly.db import get_staleness_top
-    items = get_staleness_top(limit=limit)
+    team_id = None if user.get("role") == "admin" else user.get("team_id")
+    items = get_staleness_top(limit=limit, team_id=team_id)
     return {"documents": items, "total": len(items)}
 
 
@@ -131,5 +139,6 @@ async def dependency_risk(
     user: dict = Depends(get_current_user),
 ) -> dict:
     from src.anomaly.db import get_dependency_risk
-    items = get_dependency_risk()
+    team_id = None if user.get("role") == "admin" else user.get("team_id")
+    items = get_dependency_risk(team_id=team_id)
     return {"libraries": items, "total": len(items)}

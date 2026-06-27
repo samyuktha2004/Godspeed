@@ -15,6 +15,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from src.auth.email import send_email
+from src.auth.permissions import permissions_for_role
 from src.config import settings
 from src.utils.logger import get_logger
 
@@ -176,6 +177,7 @@ async def login(body: LoginRequest, response: Response) -> dict:
                     "team":                {"id": team_id, "name": team_id.capitalize()},
                     "is_new_hire":         db_user.get("is_new_hire", False),
                     "allowed_channel_ids": channel_ids,
+                    "permissions":         permissions_for_role(db_user["role"]),
                 }
                 logger.info("auth_login_db", extra={"email": email, "role": db_user["role"]})
     except Exception:
@@ -187,7 +189,7 @@ async def login(body: LoginRequest, response: Response) -> dict:
         if not entry or entry["password"] != body.password:
             logger.warning("auth_failed", extra={"email": email})
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        user_obj = entry["user"]
+        user_obj = {**entry["user"], "permissions": permissions_for_role(entry["user"].get("role", "engineer"))}
         logger.info("auth_login_dev", extra={"email": email})
 
     session_id = str(uuid4())
@@ -357,6 +359,7 @@ async def google_callback(
             "team":                {"id": team_id, "name": team_id.capitalize()},
             "is_new_hire":         db_user.get("is_new_hire", False),
             "allowed_channel_ids": channel_ids,
+            "permissions":         permissions_for_role(db_user["role"]),
         }
 
     except Exception:
@@ -391,7 +394,7 @@ _INVITE_TTL = 7 * 24 * 3600  # 7 days in seconds
 _DEFAULT_WORKSPACE_ID = "00000000-0000-0000-0000-000000000001"
 
 # Allowed roles that can send invitations
-_INVITE_ALLOWED_ROLES = {"admin"}
+_INVITE_ALLOWED_ROLES = {"admin", "manager"}
 
 
 async def _require_invite_role(gs_session: str | None = Cookie(default=None)) -> dict:
@@ -434,6 +437,11 @@ async def send_invite(
         raise HTTPException(
             status_code=400,
             detail=f"Invalid role '{body.role}'. Allowed: {sorted(_VALID_INVITE_ROLES)}",
+        )
+    if caller.get("role") == "manager" and body.role != "engineer":
+        raise HTTPException(
+            status_code=403,
+            detail="Managers can only invite engineers",
         )
     email = body.email.lower()
 

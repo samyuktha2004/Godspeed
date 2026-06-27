@@ -13,13 +13,19 @@ interface Response {
   trend:               { data: TrendPoint[] }
 }
 
-async function fetchTrend(): Promise<Response> {
-  const res = await apiFetch('/api/analytics/queries?date_range=30d')
+async function fetchTrend(teamId: string | null | undefined): Promise<Response> {
+  const params = new URLSearchParams({ date_range: '30d' })
+  if (teamId) params.set('team_id', teamId)
+  const res = await apiFetch(`/api/analytics/queries?${params}`)
   return res.json()
 }
 
-export function QueryTrendChart() {
-  const { data, isLoading } = useQuery({ queryKey: ['analytics-trend'], queryFn: fetchTrend, staleTime: 300_000 })
+export function QueryTrendChart({ teamId }: { teamId?: string | null }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['analytics-trend', teamId ?? 'all'],
+    queryFn: () => fetchTrend(teamId),
+    staleTime: 300_000,
+  })
 
   return (
     <div className="rounded-xl border border-surface-subtle p-5">

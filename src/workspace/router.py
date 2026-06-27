@@ -6,9 +6,10 @@ import json
 from typing import Literal
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from src.auth.deps import get_current_user
 from src.config import settings
 from src.utils.logger import get_logger
 
@@ -32,12 +33,20 @@ async def _redis() -> aioredis.Redis:
 async def get_history(
     page:  int = Query(default=1, ge=1),
     limit: int = Query(default=20, ge=1, le=100),
+    user: dict = Depends(get_current_user),
 ) -> dict:
+    is_admin = user.get("role") == "admin"
+    user_id  = user.get("id")
+
     r = await _redis()
     try:
-        total    = await r.llen(HISTORY_KEY)
-        start    = (page - 1) * limit
-        raw_list = await r.lrange(HISTORY_KEY, start, start + limit - 1)
+        # Admins get the full list via Redis offset; non-admins filter in Python
+        if is_admin:
+            total    = await r.llen(HISTORY_KEY)
+            start    = (page - 1) * limit
+            raw_list = await r.lrange(HISTORY_KEY, start, start + limit - 1)
+        else:
+            raw_list = await r.lrange(HISTORY_KEY, 0, 9999)
     except Exception as exc:
         logger.warning("workspace_history_redis_failed", extra={"error": str(exc)})
         return {"items": [], "total": 0}
@@ -48,6 +57,8 @@ async def get_history(
     for raw in raw_list:
         try:
             ev = json.loads(raw)
+            if not is_admin and ev.get("user_id") != user_id:
+                continue
             items.append({
                 "id":           ev.get("id", ""),
                 "query":        ev.get("query", ""),
@@ -58,6 +69,11 @@ async def get_history(
             })
         except Exception:
             continue
+
+    if not is_admin:
+        total = len(items)
+        start = (page - 1) * limit
+        items = items[start: start + limit]
 
     return {"items": items, "total": total}
 
@@ -75,7 +91,7 @@ class FeedbackBody(BaseModel):
 
 
 @router.post("/api/query/{query_id}/feedback")
-async def post_feedback(query_id: str, body: FeedbackBody) -> dict:
+async def post_feedback(query_id: str, body: FeedbackBody, user: dict = Depends(get_current_user)) -> dict:
     r = await _redis()
     try:
         key     = FEEDBACK_KEY.format(id=query_id)

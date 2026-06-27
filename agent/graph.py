@@ -230,7 +230,11 @@ async def synthesiser_node(state: KnowledgeGraphState) -> dict:
                 seen.add(chunk.chunk_id)
                 all_chunks.append(chunk)
 
-    await _push_event(queue, "citations", {"chunks": [c.model_dump() for c in all_chunks]})
+    channel_filter_applied = bool(state.query_input.allowed_channel_ids)
+    await _push_event(queue, "citations", {
+        "chunks":                 [c.model_dump() for c in all_chunks],
+        "channel_filter_applied": channel_filter_applied,
+    })
 
     return {"final_answer": final_answer, "citations": all_chunks}
 

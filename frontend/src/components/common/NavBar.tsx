@@ -2,7 +2,7 @@ import { Link, useLocation, useNavigate } from '@tanstack/react-router'
 import { useUIStore } from '@/stores/uiStore'
 import { useAuth } from '@/hooks/useAuth'
 import { NotificationBell } from './NotificationBell'
-import { cn, isAdmin } from '@/lib/utils'
+import { cn, isAdmin, isManager } from '@/lib/utils'
 
 const BASE_NAV = [
   { to: '/',          label: 'Home'      },
@@ -12,7 +12,8 @@ const BASE_NAV = [
   { to: '/settings',  label: 'Settings'  },
 ]
 
-const ADMIN_NAV = { to: '/admin', label: 'Admin' }
+const ADMIN_NAV   = { to: '/admin', label: 'Admin' }
+const TEAM_NAV    = { to: '/team',  label: 'Team'  }
 
 export function NavBar() {
   const theme       = useUIStore((s) => s.theme)
@@ -20,7 +21,11 @@ export function NavBar() {
   const { pathname } = useLocation()
   const navigate    = useNavigate()
   const { user, signOut } = useAuth()
-  const navLinks = isAdmin(user) ? [...BASE_NAV, ADMIN_NAV] : BASE_NAV
+  const navLinks = isAdmin(user)
+    ? [...BASE_NAV, TEAM_NAV, ADMIN_NAV]
+    : isManager(user)
+    ? [...BASE_NAV, TEAM_NAV]
+    : BASE_NAV
 
   const handleSignOut = async () => {
     await signOut()

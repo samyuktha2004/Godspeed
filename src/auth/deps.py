@@ -43,6 +43,26 @@ def require_role(*roles: str):
     return _check
 
 
+def require_permission(perm: str):
+    """
+    Dependency factory that enforces the caller holds a specific permission.
+
+    Permissions are stored in the session under 'permissions' (list[str]).
+    Usage:
+        @router.post("/export")
+        async def export(user = Depends(require_permission(Permission.EXPORT_ANALYTICS))):
+            ...
+    """
+    async def _check(user: dict = Depends(get_current_user)) -> dict:
+        if perm not in user.get("permissions", []):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Missing permission: {perm}",
+            )
+        return user
+    return _check
+
+
 def require_owner():
     """
     Dependency that enforces the caller is the workspace owner (is_owner=True).

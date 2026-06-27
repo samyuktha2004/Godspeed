@@ -10,6 +10,10 @@ export function isAdmin(user: User | null | undefined): boolean {
   return user?.role === 'admin'
 }
 
+export function isManager(user: User | null | undefined): boolean {
+  return user?.role === 'manager'
+}
+
 export function isOwner(user: User | null | undefined): boolean {
   return user?.is_owner === true
 }

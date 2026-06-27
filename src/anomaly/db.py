@@ -177,6 +177,22 @@ def get_signals(
         return []
 
 
+def get_signal_by_id(signal_id: str) -> dict | None:
+    try:
+        result = (
+            _sb()
+            .table("anomaly_signals")
+            .select("id,team_id,resolved")
+            .eq("id", signal_id)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+    except Exception:
+        logger.warning("anomaly_db: get_signal_by_id failed id=%s", signal_id, exc_info=True)
+        return None
+
+
 def resolve_signal(signal_id: str, resolver_user_id: str) -> bool:
     try:
         _sb().table("anomaly_signals").update({
@@ -190,17 +206,21 @@ def resolve_signal(signal_id: str, resolver_user_id: str) -> bool:
         return False
 
 
-def get_signals_summary() -> dict:
-    """Return unresolved signal counts grouped by type and severity."""
+def get_signals_summary(team_id: str | None = None) -> dict:
+    """Return unresolved signal counts grouped by type and severity.
+
+    Pass team_id to restrict to a single team (for non-admin callers).
+    """
     try:
-        result = (
+        q = (
             _sb()
             .table("anomaly_signals")
             .select("signal_type,severity")
             .eq("resolved", False)
-            .execute()
         )
-        rows = result.data or []
+        if team_id:
+            q = q.eq("team_id", team_id)
+        rows = q.execute().data or []
         by_type: dict[str, int] = {}
         by_severity: dict[str, int] = {}
         for r in rows:
@@ -212,36 +232,39 @@ def get_signals_summary() -> dict:
         return {"total": 0, "by_type": {}, "by_severity": {}}
 
 
-def get_staleness_top(limit: int = 30) -> list[dict]:
+def get_staleness_top(limit: int = 30, team_id: str | None = None) -> list[dict]:
     try:
-        result = (
+        q = (
             _sb()
             .table("anomaly_signals")
-            .select("entity_id,score,details,detected_at")
+            .select("entity_id,score,details,detected_at,team_id")
             .eq("signal_type", "staleness")
             .eq("resolved", False)
             .order("score", desc=True)
             .limit(limit)
-            .execute()
         )
-        return result.data or []
+        if team_id:
+            q = q.eq("team_id", team_id)
+        return q.execute().data or []
     except Exception:
         logger.warning("anomaly_db: get_staleness_top failed", exc_info=True)
         return []
 
 
-def get_dependency_risk(limit: int = 50) -> list[dict]:
+def get_dependency_risk(limit: int = 50, team_id: str | None = None) -> list[dict]:
     try:
-        result = (
+        q = (
             _sb()
             .table("anomaly_signals")
-            .select("entity_id,score,details,detected_at")
+            .select("entity_id,score,details,detected_at,team_id")
             .eq("signal_type", "dependency_risk")
             .eq("resolved", False)
             .order("score", desc=True)
             .limit(limit)
-            .execute()
         )
+        if team_id:
+            q = q.eq("team_id", team_id)
+        result = q.execute()
         return result.data or []
     except Exception:
         logger.warning("anomaly_db: get_dependency_risk failed", exc_info=True)

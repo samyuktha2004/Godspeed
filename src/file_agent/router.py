@@ -8,9 +8,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
+from src.auth.deps import require_role
 from src.file_agent.config import file_config
 from src.file_agent.tasks import file_process_task
 
@@ -32,6 +33,7 @@ class FolderRequest(BaseModel):
 async def ingest_file(
     file: UploadFile = File(...),
     team_id: str = "",
+    _user: dict = Depends(require_role("admin")),
 ) -> dict[str, Any]:
     """Upload a file and dispatch it to the ingestion pipeline."""
     suffix = Path(file.filename or "upload").suffix.lower()
@@ -55,7 +57,7 @@ async def ingest_file(
 
 
 @router.post("/api/ingest/folder")
-async def ingest_folder(body: FolderRequest) -> dict[str, Any]:
+async def ingest_folder(body: FolderRequest, _user: dict = Depends(require_role("admin"))) -> dict[str, Any]:
     """Queue ingestion for all supported files in a folder."""
     folder = Path(body.folder_path)
     if not folder.is_dir():

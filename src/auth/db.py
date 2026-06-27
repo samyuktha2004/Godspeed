@@ -39,28 +39,32 @@ def get_user_by_email(email: str) -> Optional[dict]:
 
 def get_allowed_channel_ids(user_id: str, role: str) -> list[str]:
     """
-    Compute the channel IDs accessible to a user.
+    Compute the channel IDs accessible to a user, respecting sensitivity levels.
 
-    Resolution order:
-      1. Start with channels where the user's role is in channel_role_grants.
-      2. Add channels where user has an explicit user_channel_permissions(can_read=True).
-      3. Remove channels where user has user_channel_permissions(can_read=False) — explicit revoke.
+    Sensitivity rules:
+      - public:       always accessible (no role/permission required)
+      - internal:     accessible via channel_role_grants for the user's role
+      - confidential: admin only, OR explicit user_channel_permissions(can_read=True)
+      - restricted:   explicit user_channel_permissions(can_read=True) only (role grants ignored)
 
-    Returns a list of channel UUID strings.
+    Per-user explicit revokes (can_read=False) always remove access regardless of sensitivity.
+    Admins bypass sensitivity and receive all channels except those explicitly revoked.
     """
     try:
         sb = _client()
 
-        # Channels accessible via role
-        role_result = (
-            sb.table("channel_role_grants")
-            .select("channel_id")
-            .eq("role", role)
+        # Fetch all channels with their sensitivity
+        channels_result = (
+            sb.table("channels")
+            .select("id, sensitivity")
             .execute()
         )
-        role_channels: set[str] = {r["channel_id"] for r in role_result.data}
+        all_channels: dict[str, str] = {
+            r["id"]: r.get("sensitivity", "internal")
+            for r in channels_result.data
+        }
 
-        # Per-user overrides
+        # Per-user explicit overrides
         override_result = (
             sb.table("user_channel_permissions")
             .select("channel_id, can_read")
@@ -70,7 +74,36 @@ def get_allowed_channel_ids(user_id: str, role: str) -> list[str]:
         explicitly_granted: set[str] = {r["channel_id"] for r in override_result.data if r["can_read"]}
         explicitly_revoked: set[str] = {r["channel_id"] for r in override_result.data if not r["can_read"]}
 
-        allowed = (role_channels | explicitly_granted) - explicitly_revoked
+        # Admins get everything (except explicit revokes)
+        if role == "admin":
+            allowed = set(all_channels.keys()) - explicitly_revoked
+            return list(allowed)
+
+        # Channels accessible via role grants (applies to internal channels)
+        role_result = (
+            sb.table("channel_role_grants")
+            .select("channel_id")
+            .eq("role", role)
+            .execute()
+        )
+        role_channels: set[str] = {r["channel_id"] for r in role_result.data}
+
+        allowed: set[str] = set()
+        for channel_id, sensitivity in all_channels.items():
+            if channel_id in explicitly_revoked:
+                continue
+            if channel_id in explicitly_granted:
+                allowed.add(channel_id)
+                continue
+            if sensitivity == "public":
+                allowed.add(channel_id)
+            elif sensitivity == "internal" and channel_id in role_channels:
+                allowed.add(channel_id)
+            elif sensitivity == "confidential":
+                pass  # requires explicit grant (admin or user_channel_permissions)
+            elif sensitivity == "restricted":
+                pass  # requires explicit grant only
+
         return list(allowed)
 
     except Exception:
