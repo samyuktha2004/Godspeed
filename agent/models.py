@@ -29,6 +29,32 @@ class ExecutionPlan(BaseModel):
     reasoning: str
 
 
+class RetrievalScope(BaseModel):
+    """A narrowing filter the router applies BEFORE retrieval to cut cost/noise.
+
+    Empty lists mean "no constraint on this dimension". A scope is only ever
+    populated when the router is highly confident (soft-routing policy) — when
+    unsure the router emits scope=None and retrieval stays broad, so a correct
+    answer can never become unreachable.
+    """
+    source_types:  list[str] = Field(default_factory=list)   # e.g. ["confluence"]
+    space_keys:    list[str] = Field(default_factory=list)    # Confluence space keys (payload: space_key)
+    repos:         list[str] = Field(default_factory=list)    # GitHub repos (payload: repo)
+    jira_projects: list[str] = Field(default_factory=list)    # agent-selection hint only (no Qdrant payload field)
+
+    def is_empty(self) -> bool:
+        return not (self.source_types or self.space_keys or self.repos or self.jira_projects)
+
+
+class RoutingDecision(BaseModel):
+    """Output of the deterministic router_node, consumed by the planner and
+    threaded into retrieval as an additive Qdrant pre-filter."""
+    scope: Optional[RetrievalScope] = None       # None => broad search (soft fallback)
+    suggested_agents: list[str] = Field(default_factory=list)
+    confidence: Literal["high", "medium", "low"] = "low"
+    reasoning: str = ""
+
+
 class RetrievedChunk(BaseModel):
     chunk_id: str
     text: str
@@ -50,6 +76,7 @@ class KnowledgeGraphState(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     query_input: QueryInput
+    routing_decision: Optional[RoutingDecision] = None
     execution_plan: Optional[ExecutionPlan] = None
     agent_results: Annotated[dict[str, AgentResult], lambda x, y: {**x, **y}] = Field(default_factory=dict)
     final_answer: Optional[str] = None

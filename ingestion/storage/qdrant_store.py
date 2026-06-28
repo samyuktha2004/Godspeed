@@ -17,6 +17,37 @@ def _chunk_uuid(chunk_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk_id))
 
 
+# Fields the query path filters on (RBAC + Phase-1 routing scope + delete-by-doc).
+# Keyword payload indexes keep these filters fast as the collection grows.
+_PAYLOAD_INDEX_FIELDS = ("team_id", "channel_id", "source_type", "space_key", "repo", "doc_id")
+_indexes_ensured = False
+
+
+def ensure_payload_indexes() -> None:
+    """Idempotently create keyword payload indexes on the fields we filter by.
+
+    Runs once per process. Safe on an existing, populated collection — Qdrant
+    builds each index over current points. Each call is best-effort: an
+    already-existing index simply no-ops.
+    """
+    global _indexes_ensured
+    if _indexes_ensured:
+        return
+    client = _get_client()
+    for field in _PAYLOAD_INDEX_FIELDS:
+        try:
+            client.create_payload_index(
+                collection_name=settings.qdrant_collection,
+                field_name=field,
+                field_schema=qmodels.PayloadSchemaType.KEYWORD,
+            )
+        except Exception:
+            # Index already exists (or collection not ready) — idempotent, ignore.
+            logger.debug("qdrant_store: payload index for %r skipped/exists", field, exc_info=True)
+    _indexes_ensured = True
+    logger.info("qdrant_store: ensured payload indexes on %s", ", ".join(_PAYLOAD_INDEX_FIELDS))
+
+
 def _get_client() -> QdrantClient:
     return QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
 
@@ -37,7 +68,7 @@ def ensure_collection_exists() -> None:
         },
         sparse_vectors_config={
             settings.qdrant_sparse_vector_name: qmodels.SparseVectorParams(
-                index=qmodels.SparseIndexParams(on_disk=False)
+                index=qmodels.SparseIndexParams(on_disk=settings.qdrant_sparse_on_disk)
             )
         },
     )
@@ -50,6 +81,7 @@ def upsert_chunks(chunks: list[EmbeddedChunk]) -> None:
 
     try:
         ensure_collection_exists()
+        ensure_payload_indexes()
         client = _get_client()
 
         points = [
@@ -69,6 +101,10 @@ def upsert_chunks(chunks: list[EmbeddedChunk]) -> None:
                     "source": chunk.source,
                     "source_type": chunk.source_type,
                     "team_id": chunk.team_id,
+                    # RBAC channel key — the query-time filter matches on this.
+                    # May be None for workspace-wide/legacy content (handled by
+                    # the team_id-plus-null fallback branch in doc_search).
+                    "channel_id": chunk.channel_id,
                     "chunk_index": chunk.chunk_index,
                     **chunk.metadata,
                 },

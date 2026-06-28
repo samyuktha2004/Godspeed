@@ -1,4 +1,8 @@
-"""Qdrant hybrid retrieval with BGE-M3 embeddings, BM25, RRF fusion, and reranking."""
+"""Qdrant hybrid retrieval: BGE-M3 dense + sparse, RRF fusion, reranking.
+
+BM25 (rank_bm25) is an opt-in third leg, default OFF (settings.enable_bm25) — see
+the note in run_doc_search. Default retrieval is dense + sparse, both RBAC-filtered.
+"""
 
 from __future__ import annotations
 
@@ -12,9 +16,62 @@ from qdrant_client.http import models as qmodels
 from rank_bm25 import BM25Okapi
 
 from agent.config import settings
-from agent.models import RetrievedChunk
+from agent.models import RetrievalScope, RetrievedChunk
 
 logger = logging.getLogger(__name__)
+
+
+def build_rbac_filter(team_id: str, allowed_channel_ids: list[str] | None):
+    """The team/channel RBAC filter applied to EVERY Qdrant retrieval agent.
+
+    - With channel scoping: match chunks tagged with an allowed channel, OR
+      legacy/workspace-wide chunks that have no channel_id but match the team.
+    - Without channel scoping (admins, or callers that pass none): team only.
+
+    Centralised so doc_search, ticket_lookup, and confluence_search cannot drift
+    apart — a per-agent copy previously let two agents bypass channel RBAC.
+    """
+    if allowed_channel_ids:
+        return qmodels.Filter(
+            should=[
+                qmodels.FieldCondition(
+                    key="channel_id",
+                    match=qmodels.MatchAny(any=allowed_channel_ids),
+                ),
+                qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(key="team_id", match=qmodels.MatchValue(value=team_id)),
+                        qmodels.IsNullCondition(is_null=qmodels.PayloadField(key="channel_id")),
+                    ]
+                ),
+            ]
+        )
+    return qmodels.Filter(
+        must=[qmodels.FieldCondition(key="team_id", match=qmodels.MatchValue(value=team_id))]
+    )
+
+
+def build_scope_conditions(
+    scope: Optional[RetrievalScope],
+    allow: tuple[str, ...] = ("source_type", "space_key", "repo"),
+) -> list:
+    """Translate a RetrievalScope into additive Qdrant FieldConditions.
+
+    Only the dimensions in `allow` are applied — e.g. confluence_search passes
+    ("space_key",) because its source_type is already fixed. Jira project scope
+    is intentionally NOT a payload filter (no `project` field exists); it is a
+    planner agent-selection hint only.
+    """
+    if scope is None:
+        return []
+    conds: list = []
+    if "source_type" in allow and scope.source_types:
+        conds.append(qmodels.FieldCondition(key="source_type", match=qmodels.MatchAny(any=scope.source_types)))
+    if "space_key" in allow and scope.space_keys:
+        conds.append(qmodels.FieldCondition(key="space_key", match=qmodels.MatchAny(any=scope.space_keys)))
+    if "repo" in allow and scope.repos:
+        conds.append(qmodels.FieldCondition(key="repo", match=qmodels.MatchAny(any=scope.repos)))
+    return conds
 
 
 def _get_qdrant_client() -> AsyncQdrantClient:
@@ -135,6 +192,7 @@ async def run_doc_search(
     query: str,
     team_id: str,
     allowed_channel_ids: list[str] | None = None,
+    scope: Optional[RetrievalScope] = None,
 ) -> list[RetrievedChunk]:
     masked_query = _mask_pii(query)
     logger.info("doc_search: masked query = %r", masked_query)
@@ -152,15 +210,20 @@ async def run_doc_search(
     sparse_indices = list(sparse_weights.keys())
     sparse_values = [sparse_weights[i] for i in sparse_indices]
 
+    # BM25 is opt-in (settings.enable_bm25). Default OFF: retrieval is dense +
+    # BGE-M3 sparse, both RBAC-filtered in Qdrant. When ON, BM25 only contributes
+    # ranking for ids that ALSO appear in the RBAC-filtered Qdrant results (see the
+    # candidate loop) — it can never introduce unfiltered cross-tenant hits.
     bm25_ranked_ids: list[str] = []
-    bm25, corpus, doc_ids, bm25_metadata = _load_bm25()
-    if bm25 is not None and doc_ids:
-        tokenized = masked_query.lower().split()
-        bm25_scores = bm25.get_scores(tokenized)
-        top_bm25_idx = sorted(
-            range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True
-        )[: settings.rrf_top_k]
-        bm25_ranked_ids = [doc_ids[i] for i in top_bm25_idx]
+    if settings.enable_bm25:
+        bm25, _corpus, doc_ids, _bm25_metadata = _load_bm25()
+        if bm25 is not None and doc_ids:
+            tokenized = masked_query.lower().split()
+            bm25_scores = bm25.get_scores(tokenized)
+            top_bm25_idx = sorted(
+                range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True
+            )[: settings.rrf_top_k]
+            bm25_ranked_ids = [doc_ids[i] for i in top_bm25_idx]
 
     qdrant_ranked_ids: list[str] = []
     qdrant_payload_map: dict[str, dict] = {}
@@ -169,29 +232,16 @@ async def run_doc_search(
     try:
         client = _get_qdrant_client()
 
-        # Channel-based filter (RBAC): use allowed_channel_ids when set.
-        # Falls back to team_id for legacy points that pre-date channel tagging.
-        if allowed_channel_ids:
-            qdrant_filter = qmodels.Filter(
-                should=[
-                    # New RBAC path: chunk tagged with an allowed channel
-                    qmodels.FieldCondition(
-                        key="channel_id",
-                        match=qmodels.MatchAny(any=allowed_channel_ids),
-                    ),
-                    # Legacy path: chunk has no channel_id but matches team_id
-                    qmodels.Filter(
-                        must=[
-                            qmodels.FieldCondition(key="team_id", match=qmodels.MatchValue(value=team_id)),
-                            qmodels.IsNullCondition(is_null=qmodels.PayloadField(key="channel_id")),
-                        ]
-                    ),
-                ]
-            )
-        else:
-            qdrant_filter = qmodels.Filter(
-                must=[qmodels.FieldCondition(key="team_id", match=qmodels.MatchValue(value=team_id))]
-            )
+        # Channel/team RBAC filter — shared with ticket_lookup and confluence_search.
+        qdrant_filter = build_rbac_filter(team_id, allowed_channel_ids)
+
+        # Soft-routing: AND the router's scope onto the RBAC filter (never replaces it).
+        # The router only populates scope at high confidence, so broad search is
+        # unchanged when the router is unsure.
+        scope_conditions = build_scope_conditions(scope)
+        if scope_conditions:
+            qdrant_filter = qmodels.Filter(must=[qdrant_filter, *scope_conditions])
+            logger.info("doc_search: applying routing scope %s", scope.model_dump() if scope else None)
 
         dense_response = await client.query_points(
             collection_name=settings.qdrant_collection,
@@ -242,19 +292,11 @@ async def run_doc_search(
     for doc_id in top_ids:
         payload = qdrant_payload_map.get(doc_id)
         if payload is None:
-            # BM25-only hit has no Qdrant payload — reconstruct from corpus
-            if doc_ids and doc_id in doc_ids:
-                idx = doc_ids.index(doc_id)
-                text = corpus[idx] if corpus else ""
-                meta = bm25_metadata[idx] if bm25_metadata else {}
-                payload = {
-                    "chunk_id": doc_id,
-                    "text": text,
-                    "source": meta.get("source") or meta.get("source_url") or "bm25",
-                    "source_type": meta.get("source_type", "internal"),
-                }
-            else:
-                continue
+            # Tenant safety: only rank points returned by the RBAC-filtered Qdrant
+            # search. When BM25 is enabled it may rank ids that weren't in the
+            # filtered Qdrant results — drop them instead of reconstructing from the
+            # unfiltered BM25 corpus, which would bypass team/channel RBAC.
+            continue
         candidates.append({"id": doc_id, "payload": payload, "rrf_score": rrf_scores[doc_id]})
 
     if not candidates:

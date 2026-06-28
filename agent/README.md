@@ -89,19 +89,23 @@ app.include_router(router)
 | `DATABASE_URL` | optional | Direct PostgreSQL URL — enables sql_query. e.g. `postgresql://postgres:pw@localhost:5432/postgres` |
 | `SQL_MAX_ROWS` | optional | Max rows returned per SQL query (default: `20`) |
 
-## BM25 index
+## Retrieval legs
 
-`doc_search` expects a BM25 index at `data/bm25_index.pkl` as a pickle with:
+Default retrieval is **dense + sparse** (both BGE-M3, fused via RRF, then reranked) —
+both queried from Qdrant with the same team/channel RBAC filter. The BGE-M3 sparse
+vector is the scalable, RBAC-filtered lexical index.
 
-```python
-{
-  "index": BM25Okapi(...),
-  "corpus": ["doc text 1", "doc text 2", ...],
-  "doc_ids": ["chunk_id_1", "chunk_id_2", ...]
-}
-```
+### BM25 (opt-in, default OFF)
 
-If the file is missing, BM25 is silently skipped and only Qdrant vectors are used.
+`rank_bm25` is an optional third leg, disabled by default. Enable with `ENABLE_BM25=true`
+(set in both the agent and ingestion environments) only for a labeled A/B — it adds a
+per-ingest full index rebuild and is in-memory/O(N) per query, so it does not scale.
+
+When enabled, `doc_search` reads a BM25 index at `data/bm25_index.pkl` (a pickle with
+`{"index": BM25Okapi(...), "corpus": [...], "doc_ids": [...]}`), rebuilt from Supabase
+on each ingest. For tenant safety, BM25 only **re-ranks points already returned by the
+RBAC-filtered Qdrant search** — it never introduces BM25-only hits. If the file is
+missing, BM25 is silently skipped.
 
 ## Qdrant collection schema
 

@@ -10,8 +10,9 @@ from langgraph.graph import END, StateGraph
 
 from agent.agents.guardrail import run_guardrail
 from agent.agents.planner import run_planner
+from agent.agents.router import _load_manifest, manifest_digest, run_router
 from agent.agents.synthesiser import stream_synthesis
-from agent.models import AgentResult, KnowledgeGraphState, RetrievedChunk
+from agent.models import AgentResult, KnowledgeGraphState, RetrievalScope, RetrievedChunk
 from agent.tools.confluence_search import run_confluence_search
 from agent.tools.doc_search import compute_retrieval_confidence, run_doc_search
 from agent.tools.live_docs import run_live_docs
@@ -27,9 +28,31 @@ async def _push_event(queue: asyncio.Queue, event: str, data: Any) -> None:
         await queue.put({"event": event, "data": data})
 
 
+async def router_node(state: KnowledgeGraphState) -> dict:
+    """Deterministic Stage-0 router — narrows scope and suggests agents before the planner."""
+    queue = state.sse_queue
+    decision = await run_router(state.query_input)
+    await _push_event(
+        queue,
+        "routing_ready",
+        {
+            "suggested_agents": decision.suggested_agents,
+            "confidence": decision.confidence,
+            "scope": decision.scope.model_dump() if decision.scope else None,
+            "reasoning": decision.reasoning,
+        },
+    )
+    return {"routing_decision": decision}
+
+
 async def planner_node(state: KnowledgeGraphState) -> dict:
     queue = state.sse_queue
-    plan = await run_planner(state.query_input)
+    manifest = await _load_manifest(state.query_input.team_id)
+    plan = await run_planner(
+        state.query_input,
+        routing_decision=state.routing_decision,
+        manifest_summary=manifest_digest(manifest),
+    )
     await _push_event(
         queue,
         "plan_ready",
@@ -39,6 +62,10 @@ async def planner_node(state: KnowledgeGraphState) -> dict:
         },
     )
     return {"execution_plan": plan}
+
+
+def _current_scope(state: KnowledgeGraphState) -> RetrievalScope | None:
+    return state.routing_decision.scope if state.routing_decision else None
 
 
 async def doc_search_node(state: KnowledgeGraphState) -> dict:
@@ -54,6 +81,7 @@ async def doc_search_node(state: KnowledgeGraphState) -> dict:
             task_input,
             state.query_input.team_id,
             state.query_input.allowed_channel_ids or None,
+            scope=_current_scope(state),
         )
     except Exception as exc:
         logger.exception("doc_search_node error")
@@ -83,7 +111,11 @@ async def ticket_lookup_node(state: KnowledgeGraphState) -> dict:
     error: str | None = None
 
     try:
-        chunks = await run_ticket_lookup(task_input, state.query_input.team_id)
+        chunks = await run_ticket_lookup(
+            task_input,
+            state.query_input.team_id,
+            state.query_input.allowed_channel_ids or None,
+        )
     except Exception as exc:
         logger.exception("ticket_lookup_node error")
         error = str(exc)
@@ -112,7 +144,12 @@ async def confluence_search_node(state: KnowledgeGraphState) -> dict:
     error: str | None = None
 
     try:
-        chunks = await run_confluence_search(task_input, state.query_input.team_id)
+        chunks = await run_confluence_search(
+            task_input,
+            state.query_input.team_id,
+            state.query_input.allowed_channel_ids or None,
+            scope=_current_scope(state),
+        )
     except Exception as exc:
         logger.exception("confluence_search_node error")
         error = str(exc)
@@ -295,6 +332,7 @@ def _route_after_guardrail(state: KnowledgeGraphState) -> str:
 def build_graph() -> Any:
     builder = StateGraph(KnowledgeGraphState)
 
+    builder.add_node("router_node", router_node)
     builder.add_node("planner_node", planner_node)
     builder.add_node("doc_search_node", doc_search_node)
     builder.add_node("ticket_lookup_node", ticket_lookup_node)
@@ -306,7 +344,8 @@ def build_graph() -> Any:
     builder.add_node("synthesiser_node", synthesiser_node)
     builder.add_node("guardrail_node", guardrail_node)
 
-    builder.set_entry_point("planner_node")
+    builder.set_entry_point("router_node")
+    builder.add_edge("router_node", "planner_node")
 
     builder.add_conditional_edges(
         "planner_node",

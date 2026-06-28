@@ -20,6 +20,7 @@ Rules:
 6. Do NOT include agents that are not needed for this query.
 7. Rephrase the input for each agent to be focused and specific to what that agent can retrieve.
 8. sql_query runs independently (depends_on: []). Use it when the query is about structured or aggregated data rather than semantic knowledge retrieval. It can run in parallel with doc_search.
+9. A deterministic router may provide `suggested_agents`, a `confidence`, and the team's known sources. PREFER the suggested agents — when confidence is "high", do not add other retrieval agents unless the query clearly spans more sources. This keeps fan-out (and cost) minimal. When confidence is "low", treat the suggestion as weak and decide freely.
 
 Return ONLY valid JSON matching this exact schema. No preamble. No markdown code fences. No explanation outside the JSON.
 

@@ -38,11 +38,21 @@ create index if not exists chunks_team_id_idx   on chunks (team_id);
 
 -- Teams table — one row per tenant team
 create table if not exists teams (
-    team_id      text primary key,
-    cag_snapshot text,
-    snapshot_at  timestamptz,
-    created_at   timestamptz not null default now()
+    team_id          text primary key,
+    cag_snapshot     text,
+    snapshot_at      timestamptz,
+    -- Routing manifest: compact "what exists and where" index per team (Confluence
+    -- spaces / GitHub repos / Jira projects + doc counts + LLM gists). Read by the
+    -- query-time router to narrow retrieval scope. Structure refreshed cheaply on
+    -- every ingest; gists refreshed nightly by the CAG job.
+    routing_manifest jsonb,
+    manifest_at      timestamptz,
+    created_at       timestamptz not null default now()
 );
+
+-- For existing deployments where `teams` predates the manifest columns.
+alter table teams add column if not exists routing_manifest jsonb;
+alter table teams add column if not exists manifest_at timestamptz;
 
 
 -- Ingest jobs table — tracks Celery task state for the API

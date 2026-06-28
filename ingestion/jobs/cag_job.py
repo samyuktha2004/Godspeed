@@ -49,7 +49,110 @@ async def _run_cag_async() -> dict[str, Any]:
             logger.exception("cag_job: failed to build snapshot for team %s", team_id)
             results[team_id] = "error"
 
+        # Refresh the routing manifest gists alongside the nightly snapshot.
+        # Independent of the snapshot result — a manifest failure must not mask it.
+        try:
+            await _refresh_team_manifest(team_id, sb)
+        except Exception:
+            logger.exception("cag_job: failed to refresh routing manifest for team %s", team_id)
+
     return results
+
+
+async def _refresh_team_manifest(team_id: str, sb: Any) -> None:
+    """Rebuild the manifest structure and (re)generate per-entity gists via the LLM."""
+    from ingestion.storage.manifest_store import build_manifest_structure, update_routing_manifest
+
+    manifest = await asyncio.to_thread(build_manifest_structure, team_id, sb)
+
+    titles = await asyncio.to_thread(_fetch_entity_titles, team_id, sb)
+    if titles:
+        try:
+            gists = await _generate_gists(titles)
+            _apply_gists(manifest, gists)
+        except Exception:
+            logger.exception("cag_job: gist generation failed for team %s — storing structure only", team_id)
+
+    await asyncio.to_thread(update_routing_manifest, team_id, manifest, sb)
+    logger.info("cag_job: refreshed routing manifest for team %s", team_id)
+
+
+def _fetch_entity_titles(team_id: str, sb: Any) -> dict[str, dict[str, list[str]]]:
+    """Collect up to a handful of document titles per space/repo/project for gisting."""
+    from ingestion.storage.manifest_store import _jira_project
+
+    out: dict[str, dict[str, list[str]]] = {"confluence": {}, "github": {}, "jira": {}}
+    try:
+        result = (
+            sb.table("documents")
+            .select("source_type, metadata, title")
+            .eq("team_id", team_id)
+            .execute()
+        )
+        docs = result.data or []
+    except Exception:
+        logger.exception("cag_job: failed to fetch titles for team %s", team_id)
+        return out
+
+    def _add(bucket: dict[str, list[str]], key: str, title: str) -> None:
+        lst = bucket.setdefault(key, [])
+        if title and len(lst) < 8:
+            lst.append(title)
+
+    for doc in docs:
+        stype = doc.get("source_type")
+        meta = doc.get("metadata") or {}
+        title = doc.get("title") or ""
+        if stype == "confluence":
+            _add(out["confluence"], meta.get("space_key") or "unknown", title)
+        elif stype == "github":
+            _add(out["github"], meta.get("repo") or "unknown", title)
+        elif stype == "jira":
+            _add(out["jira"], _jira_project(meta), title)
+
+    return out
+
+
+_GIST_SYSTEM_PROMPT = """You label knowledge sources for a retrieval router.
+
+Given document titles grouped by source (Confluence spaces, GitHub repos, Jira
+projects), write a single concise gist (max 15 words) describing what each source
+contains. The gist helps a router decide whether a user query belongs to that
+source. Be specific and factual; do not invent topics not implied by the titles.
+
+Return ONLY valid JSON, no markdown fences, matching the input grouping:
+{
+  "confluence": {"<space_key>": "<gist>"},
+  "github": {"<repo>": "<gist>"},
+  "jira": {"<project>": "<gist>"}
+}"""
+
+
+async def _generate_gists(titles: dict[str, dict[str, list[str]]]) -> dict[str, dict[str, str]]:
+    import json
+
+    payload = json.dumps(titles, ensure_ascii=False)
+    raw = await _call_gemini_with_system(_GIST_SYSTEM_PROMPT, payload)
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("```", 2)[1] if "```" in cleaned else cleaned
+        cleaned = cleaned.replace("json", "", 1).strip() if cleaned.lstrip().startswith("json") else cleaned
+    return json.loads(cleaned)
+
+
+def _apply_gists(manifest: dict[str, Any], gists: dict[str, dict[str, str]]) -> None:
+    for space, gist in (gists.get("confluence") or {}).items():
+        entry = manifest["confluence"]["spaces"].get(space)
+        if entry:
+            entry["gist"] = gist
+    for repo, gist in (gists.get("github") or {}).items():
+        entry = manifest["github"]["repos"].get(repo)
+        if entry:
+            entry["gist"] = gist
+    for proj, gist in (gists.get("jira") or {}).items():
+        entry = manifest["jira"]["projects"].get(proj)
+        if entry:
+            entry["gist"] = gist
 
 
 async def _build_team_snapshot(team_id: str, sb: Any) -> str:
@@ -159,6 +262,10 @@ async def _fetch_github_activity(team_id: str, sb: Any, since: str) -> str:
 
 
 async def _call_gemini(user_message: str) -> str:
+    return await _call_gemini_with_system(_CAG_SYSTEM_PROMPT, user_message)
+
+
+async def _call_gemini_with_system(system_prompt: str, user_message: str) -> str:
     import asyncio
 
     from langchain_core.messages import HumanMessage, SystemMessage
@@ -171,7 +278,7 @@ async def _call_gemini(user_message: str) -> str:
         google_api_key=settings.google_api_key,
         temperature=0.0,
     )
-    messages = [SystemMessage(content=_CAG_SYSTEM_PROMPT), HumanMessage(content=user_message)]
+    messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
 
     for attempt in range(3):
         try:

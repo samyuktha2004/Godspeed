@@ -60,6 +60,7 @@ def run_ingest(self: Task, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _run_ingest_async(job_id: str, payload: IngestSourcePayload) -> dict[str, Any]:
+    from ingestion.config import settings
     from ingestion.pipeline.chunker import chunk_document
     from ingestion.pipeline.embedder import embed_chunks
     from ingestion.pipeline.pii_masker import mask_pii
@@ -139,7 +140,20 @@ async def _run_ingest_async(job_id: str, payload: IngestSourcePayload) -> dict[s
 
             await _run_graph_pipeline(embedded, doc)
 
-        rebuild_from_supabase()
+        # BM25 is opt-in (settings.enable_bm25). Default OFF: skip the full
+        # rebuild_from_supabase() that re-reads/re-tokenizes the entire corpus on
+        # every ingest. Default retrieval uses Qdrant dense + sparse instead.
+        if settings.enable_bm25:
+            rebuild_from_supabase()
+
+        # Refresh the routing manifest structure (counts + spaces/repos/projects)
+        # so the query-time router sees the new content. Cheap, no LLM — gists are
+        # refreshed nightly by the CAG job. Never let this fail the ingest.
+        try:
+            from ingestion.storage.manifest_store import refresh_manifest_structure
+            refresh_manifest_structure(payload.team_id, client=sb)
+        except Exception:
+            logger.warning("ingest_job: routing manifest refresh failed for team %s", payload.team_id)
 
         job.status = IngestJobStatus.completed
         job.completed_at = datetime.utcnow()

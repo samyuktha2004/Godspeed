@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     bge_reranker_model: str = "BAAI/bge-reranker-v2-m3"
 
     bm25_index_path: str = "data/bm25_index.pkl"
+    # BM25 (rank_bm25) is opt-in. Default OFF: retrieval is dense + BGE-M3 sparse
+    # (the scalable, RBAC-filtered lexical index). Enable only for a labeled A/B —
+    # the flag-on path re-ranks RBAC-filtered candidates only (no tenant leak).
+    enable_bm25: bool = False
 
     gliner_model: str = "urchade/gliner_mediumv2.1"
 

@@ -57,6 +57,10 @@ def embed_chunks(chunks: list[DocumentChunk]) -> list[EmbeddedChunk]:
                     source_type=chunk.source_type,
                     team_id=chunk.team_id,
                     chunk_index=chunk.chunk_index,
+                    # Carry channel_id through embedding — it's the RBAC key the
+                    # query-time filter matches on. Dropping it here silently
+                    # disabled channel-level access control.
+                    channel_id=chunk.channel_id,
                     dense_vector=dense_vector,
                     sparse_indices=sparse_indices,
                     sparse_values=sparse_values,

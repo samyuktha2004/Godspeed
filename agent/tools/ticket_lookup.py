@@ -10,10 +10,12 @@ from agent.models import RetrievedChunk
 logger = logging.getLogger(__name__)
 
 
-async def run_ticket_lookup(query: str, team_id: str) -> list[RetrievedChunk]:
+async def run_ticket_lookup(
+    query: str, team_id: str, allowed_channel_ids: list[str] | None = None
+) -> list[RetrievedChunk]:
     """Search Qdrant for Jira chunks matching the query."""
     from qdrant_client.http import models as qmodels
-    from agent.tools.doc_search import _get_embedding_model, _get_qdrant_client
+    from agent.tools.doc_search import _get_embedding_model, _get_qdrant_client, build_rbac_filter
 
     client = None
     try:
@@ -30,10 +32,12 @@ async def run_ticket_lookup(query: str, team_id: str) -> list[RetrievedChunk]:
 
         client = _get_qdrant_client()
 
+        # Pin source_type to jira, then AND the shared team/channel RBAC filter
+        # so this agent cannot return chunks outside the user's allowed channels.
         jira_filter = qmodels.Filter(
             must=[
                 qmodels.FieldCondition(key="source_type", match=qmodels.MatchValue(value="jira")),
-                qmodels.FieldCondition(key="team_id",     match=qmodels.MatchValue(value=team_id)),
+                build_rbac_filter(team_id, allowed_channel_ids),
             ]
         )
 

@@ -4,16 +4,28 @@ from __future__ import annotations
 
 import logging
 
+from typing import Optional
+
 from agent.config import settings
-from agent.models import RetrievedChunk
+from agent.models import RetrievalScope, RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
 
-async def run_confluence_search(query: str, team_id: str) -> list[RetrievedChunk]:
+async def run_confluence_search(
+    query: str,
+    team_id: str,
+    allowed_channel_ids: list[str] | None = None,
+    scope: Optional[RetrievalScope] = None,
+) -> list[RetrievedChunk]:
     """Search Qdrant for Confluence chunks matching the query."""
     from qdrant_client.http import models as qmodels
-    from agent.tools.doc_search import _get_embedding_model, _get_qdrant_client
+    from agent.tools.doc_search import (
+        _get_embedding_model,
+        _get_qdrant_client,
+        build_rbac_filter,
+        build_scope_conditions,
+    )
 
     client = None
     try:
@@ -30,12 +42,15 @@ async def run_confluence_search(query: str, team_id: str) -> list[RetrievedChunk
 
         client = _get_qdrant_client()
 
-        conf_filter = qmodels.Filter(
-            must=[
-                qmodels.FieldCondition(key="source_type", match=qmodels.MatchValue(value="confluence")),
-                qmodels.FieldCondition(key="team_id",     match=qmodels.MatchValue(value=team_id)),
-            ]
-        )
+        # Pin source_type to confluence + the shared team/channel RBAC filter.
+        # source_type is already fixed, so only the space_key dimension of the
+        # router scope is meaningful here.
+        conf_must = [
+            qmodels.FieldCondition(key="source_type", match=qmodels.MatchValue(value="confluence")),
+            build_rbac_filter(team_id, allowed_channel_ids),
+            *build_scope_conditions(scope, allow=("space_key",)),
+        ]
+        conf_filter = qmodels.Filter(must=conf_must)
 
         response = await client.query_points(
             collection_name=settings.qdrant_collection,

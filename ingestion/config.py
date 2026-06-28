@@ -18,6 +18,10 @@ class IngestionSettings(BaseSettings):
     qdrant_dense_vector_name: str = "dense"
     qdrant_sparse_vector_name: str = "sparse"
     qdrant_dense_size: int = 1024
+    # Persist the sparse index on disk instead of RAM. Default OFF (current
+    # behaviour). Only applied when a collection is CREATED — existing
+    # collections must be migrated/recreated to change this.
+    qdrant_sparse_on_disk: bool = False
 
     supabase_url: str = ""
     supabase_key: str = ""
@@ -30,6 +34,9 @@ class IngestionSettings(BaseSettings):
     spacy_model: str = "en_core_web_sm"
 
     bm25_index_path: str = "data/bm25_index.pkl"
+    # Opt-in BM25. Default OFF: no per-ingest rebuild_from_supabase() (kills the
+    # O(corpus) ingest bottleneck). Keep in sync with agent.config.enable_bm25.
+    enable_bm25: bool = False
 
     embed_batch_size: int = 32
     chunk_target_tokens: int = 512
