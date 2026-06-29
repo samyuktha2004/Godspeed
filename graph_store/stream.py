@@ -98,35 +98,19 @@ def _parse_session_cookie(websocket: WebSocket) -> str | None:
     return None
 
 
-async def _resolve_allowed_channels(websocket: WebSocket) -> list[str]:
-    """
-    Return the list of allowed channel IDs for the connecting user.
-
-    Falls back to an empty list (unfiltered view) if there is no cookie,
-    Redis is unavailable, or the session has expired.
-    """
-    from src.auth.router import _get_session  # local import to avoid circular deps
+async def _resolve_session(websocket: WebSocket) -> dict | None:
+    """Return the user dict from the gs_session cookie, or None if invalid."""
+    from src.auth.router import _get_session
 
     session_id = _parse_session_cookie(websocket)
     if not session_id:
-        logger.warning("graph_stream: no gs_session cookie — serving unfiltered graph")
-        return []
-
+        return None
     try:
         session = await _get_session(session_id)
+        return session.get("user") if session else None
     except Exception as exc:
-        logger.warning("graph_stream: session resolution failed (%s) — serving unfiltered graph", exc)
-        return []
-
-    if not session:
-        logger.warning("graph_stream: session not found or expired — serving unfiltered graph")
-        return []
-
-    user = session.get("user", {})
-    allowed = user.get("allowed_channel_ids", [])
-    if not isinstance(allowed, list):
-        allowed = []
-    return allowed
+        logger.warning("graph_stream: session resolution failed: %s", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -137,20 +121,27 @@ async def _resolve_allowed_channels(websocket: WebSocket) -> list[str]:
 async def graph_stream(websocket: WebSocket):
     await websocket.accept()
 
-    # Resolve RBAC — fall back gracefully on any error
-    try:
-        allowed_channel_ids = await _resolve_allowed_channels(websocket)
-    except Exception as exc:
-        logger.warning("graph_stream: failed to resolve RBAC (%s) — serving unfiltered graph", exc)
+    user = await _resolve_session(websocket)
+    if not user:
+        try:
+            await websocket.close(code=4001, reason="Not authenticated")
+        except Exception:
+            pass
+        return
+
+    allowed_channel_ids: list[str] = user.get("allowed_channel_ids") or []
+    if not isinstance(allowed_channel_ids, list):
         allowed_channel_ids = []
 
     use_filtered = bool(allowed_channel_ids)
     if use_filtered:
         logger.info(
-            "graph_stream: RBAC active — filtering to %d channel(s)", len(allowed_channel_ids)
+            "graph_stream: RBAC active — filtering to %d channel(s) for user %s",
+            len(allowed_channel_ids),
+            user.get("id"),
         )
     else:
-        logger.info("graph_stream: no channel restriction — serving full graph")
+        logger.info("graph_stream: no channel restriction for user %s", user.get("id"))
 
     if not _neo4j_is_available():
         try:

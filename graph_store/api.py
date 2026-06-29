@@ -4,10 +4,11 @@ from src.utils.logger import Timer, get_logger as _get_logger
 import logging
 
 from neo4j import AsyncGraphDatabase
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from graph_store.config import settings
 from graph_store.models import GraphIngestRequest, GraphTraverseRequest
+from src.auth.deps import get_current_user, require_role
 
 logger = _get_logger(__name__)
 
@@ -25,7 +26,7 @@ def _fresh_driver():
 
 
 @router.get("/nodes")
-async def graph_nodes(limit: int = 50) -> dict:
+async def graph_nodes(limit: int = 50, _user: dict = Depends(get_current_user)) -> dict:
     driver = _fresh_driver()
     with Timer() as t:
         try:
@@ -42,7 +43,7 @@ async def graph_nodes(limit: int = 50) -> dict:
 
 
 @router.post("/ingest")
-async def graph_ingest(request: GraphIngestRequest) -> dict:
+async def graph_ingest(request: GraphIngestRequest, _user: dict = Depends(require_role("admin"))) -> dict:
     from ingestion.storage.supabase_store import get_client
     from graph_store.extractor import extract_batch
     from graph_store.writer import ensure_indexes, upsert_chunk
@@ -99,7 +100,11 @@ async def graph_ingest(request: GraphIngestRequest) -> dict:
 
 
 @router.get("/traverse")
-async def graph_traverse(type: str, name: str, team_id: str) -> dict:
+async def graph_traverse(type: str, name: str, team_id: str, user: dict = Depends(get_current_user)) -> dict:
+    # Non-admins may only traverse their own team's graph
+    if user.get("role") != "admin" and team_id != user.get("team_id"):
+        raise HTTPException(status_code=403, detail="Cannot traverse another team's graph")
+
     from graph_store.reader import (
         find_library_chunks,
         traverse_from_incident,

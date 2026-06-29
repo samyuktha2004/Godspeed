@@ -30,7 +30,7 @@ def require_role(*roles: str):
 
     Usage:
         @router.get("/admin/users")
-        async def list_users(user = Depends(require_role("admin", "org_admin"))):
+        async def list_users(user = Depends(require_role("admin"))):
             ...
     """
     async def _check(user: dict = Depends(get_current_user)) -> dict:
@@ -38,6 +38,45 @@ def require_role(*roles: str):
             raise HTTPException(
                 status_code=403,
                 detail=f"Role '{user.get('role')}' cannot access this endpoint",
+            )
+        return user
+    return _check
+
+
+def require_permission(perm: str):
+    """
+    Dependency factory that enforces the caller holds a specific permission.
+
+    Permissions are stored in the session under 'permissions' (list[str]).
+    Usage:
+        @router.post("/export")
+        async def export(user = Depends(require_permission(Permission.EXPORT_ANALYTICS))):
+            ...
+    """
+    async def _check(user: dict = Depends(get_current_user)) -> dict:
+        if perm not in user.get("permissions", []):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Missing permission: {perm}",
+            )
+        return user
+    return _check
+
+
+def require_owner():
+    """
+    Dependency that enforces the caller is the workspace owner (is_owner=True).
+
+    Usage:
+        @router.delete("/workspace")
+        async def delete_workspace(user = Depends(require_owner())):
+            ...
+    """
+    async def _check(user: dict = Depends(get_current_user)) -> dict:
+        if not user.get("is_owner"):
+            raise HTTPException(
+                status_code=403,
+                detail="Only the workspace owner can perform this action",
             )
         return user
     return _check

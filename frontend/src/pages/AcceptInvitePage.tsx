@@ -116,6 +116,14 @@ export default function AcceptInvitePage() {
         >
           {isSubmitting ? 'Setting up account…' : 'Set password & join'}
         </button>
+
+        <p className="text-xs text-stone-400 leading-relaxed">
+          By joining, you agree to Godspeed's{' '}
+          <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">Terms of Service</a>
+          {' '}and{' '}
+          <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">Privacy Policy</a>.
+          Your personal data will be processed in accordance with applicable law, including India's DPDPA.
+        </p>
       </form>
     </div>
   )

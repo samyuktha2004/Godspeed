@@ -13,7 +13,7 @@ const SCOPES: Array<{ id: ExportScope; label: string; desc: string }> = [
   { id: 'full',        label: 'Full report',          desc: 'All of the above combined'            },
 ]
 
-export function AnalyticsExport() {
+export function AnalyticsExport({ teamId }: { teamId?: string | null }) {
   const [scope,      setScope]      = useState<ExportScope>('full')
   const [format,     setFormat]     = useState<ExportFormat>('csv')
   const [dateRange,  setDateRange]  = useState('30d')
@@ -22,9 +22,9 @@ export function AnalyticsExport() {
   async function handleExport() {
     setExporting(true)
     try {
-      const res = await apiFetch(
-        `/api/analytics/export?scope=${scope}&format=${format}&date_range=${dateRange}`,
-      )
+      const params = new URLSearchParams({ scope, format, date_range: dateRange })
+      if (teamId) params.set('team_id', teamId)
+      const res = await apiFetch(`/api/analytics/export?${params}`)
       const blob        = await res.blob()
       const ext         = format === 'pdf' ? 'pdf' : 'csv'
       const filename    = `godspeed-analytics-${scope}-${dateRange}.${ext}`

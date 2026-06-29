@@ -6,8 +6,9 @@ from src.utils.logger import get_logger as _get_logger
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
+from src.auth.deps import require_role
 from src.confluence_agent.config import confluence_config
 from src.confluence_agent.tasks import confluence_process_page, confluence_sync_space
 
@@ -53,7 +54,7 @@ async def confluence_webhook(
 
 
 @router.post("/confluence/sync/{space_key}")
-async def trigger_confluence_sync(space_key: str) -> dict[str, Any]:
+async def trigger_confluence_sync(space_key: str, _user: dict = Depends(require_role("admin"))) -> dict[str, Any]:
     task = confluence_sync_space.delay(space_key, confluence_config.team_id)
     logger.info("confluence_sync_triggered", extra={"task_id": task.id, "space_key": space_key})
     return {"status": "accepted", "task_id": task.id, "space_key": space_key}

@@ -1,7 +1,7 @@
 import { useNavigate, useLocation, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Home, Search, Clock, BarChart2, Settings2, LogOut,
+  Home, Search, Clock, BarChart2, Settings2, Users, LogOut,
   Sun, Moon, ChevronLeft, ChevronRight, Zap, Bell,
 } from 'lucide-react'
 import { useUIStore } from '@/stores/uiStore'
@@ -9,7 +9,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useNotifications } from '@/hooks/useNotifications'
 import { NotificationCenter } from './NotificationCenter'
 import { apiFetch } from '@/lib/http'
-import { cn } from '@/lib/utils'
+import { cn, isAdmin, isManager } from '@/lib/utils'
 import { useState } from 'react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -37,6 +37,7 @@ const BASE_NAV = [
   { to: '/workspace', Icon: Clock,     label: 'History'   },
   { to: '/analytics', Icon: BarChart2, label: 'Analytics' },
 ]
+const TEAM_NAV  = { to: '/team',  Icon: Users,     label: 'Team'  }
 const ADMIN_NAV = { to: '/admin', Icon: Settings2, label: 'Admin' }
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
@@ -62,8 +63,10 @@ export function Sidebar() {
     navigate({ to: '/login' })
   }
 
-  const navItems = (user?.role === 'admin' || user?.role === 'org_admin')
-    ? [...BASE_NAV, ADMIN_NAV]
+  const navItems = isAdmin(user)
+    ? [...BASE_NAV, TEAM_NAV, ADMIN_NAV]
+    : isManager(user)
+    ? [...BASE_NAV, TEAM_NAV]
     : BASE_NAV
 
   return (

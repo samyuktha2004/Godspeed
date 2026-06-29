@@ -16,12 +16,13 @@ export interface ExecutionPlan {
 }
 
 export interface RetrievedChunk {
-  chunk_id:       string
-  text:           string
-  source:         string
-  source_type:    string
-  score:          number
+  chunk_id:        string
+  text:            string
+  source:          string
+  source_type:     string
+  score:           number
   reranker_score?: number
+  title?:          string
 }
 
 export interface AgentResult {
@@ -43,7 +44,7 @@ export interface SSEEventMap {
   agent_done:        { agent: string; retrieval_confidence: 'high' | 'medium' | 'low'; error?: string }
   synthesis_started: Record<string, never>
   answer_chunk:      { chunk: string }
-  citations:         { chunks: RetrievedChunk[] }
+  citations:         { chunks: RetrievedChunk[]; channel_filter_applied?: boolean }
   guardrail_result:  GuardrailResult
   done:              Record<string, never>
   error:             { message: string }

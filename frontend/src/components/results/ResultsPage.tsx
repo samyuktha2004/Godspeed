@@ -19,6 +19,7 @@ import { GraphNodeDetailPanel } from '@/components/results/GraphNodeDetailPanel'
 import { QueryFeedback } from '@/components/results/QueryFeedback'
 import { ShareResults } from '@/components/results/ShareResults'
 import { NoResultsState } from '@/components/common/NoResultsState'
+import { RBACRestrictedBanner } from '@/components/common/RBACRestrictedBanner'
 import { cn } from '@/lib/utils'
 import type {
   AgentTask, RetrievedChunk, GuardrailResult, ExecutionPlan,
@@ -27,7 +28,23 @@ import type {
 
 type Tab = 'graph' | 'answer'
 
-const QR_PREFIX = 'gs_qr_'
+const QR_PREFIX   = 'gs_qr_'
+const QR_INDEX    = 'gs_qr_index'   // JSON array of keys in LRU order (oldest first)
+const QR_MAX      = 10
+
+function cacheWrite(key: string, payload: string) {
+  try {
+    sessionStorage.setItem(key, payload)
+    const raw   = sessionStorage.getItem(QR_INDEX)
+    const index: string[] = raw ? JSON.parse(raw) : []
+    const next  = [...index.filter((k) => k !== key), key]
+    if (next.length > QR_MAX) {
+      const evicted = next.splice(0, next.length - QR_MAX)
+      evicted.forEach((k) => sessionStorage.removeItem(k))
+    }
+    sessionStorage.setItem(QR_INDEX, JSON.stringify(next))
+  } catch { /* quota exceeded — skip caching */ }
+}
 
 interface Exchange {
   id: string
@@ -54,21 +71,17 @@ export function ResultsPage() {
   const [answerText, setAnswerText]   = useState('')
   const [citations, setCitations]     = useState<RetrievedChunk[]>([])
   const [guardrail, setGuardrail]     = useState<GuardrailResult | null>(null)
+  const [channelFilterApplied, setChannelFilterApplied] = useState(false)
   const [currentQuery, setCurrentQuery] = useState('')
   const [queryId, setQueryId]           = useState('')
   const [shareOpen, setShareOpen]       = useState(false)
 
-  // Refs to read current values inside the completion effect without stale closure
-  const answerTextRef  = useRef('')
-  const citationsRef   = useRef<RetrievedChunk[]>([])
-  const planRef        = useRef<AgentTask[]>([])
+  // Refs for reading current values inside runQuery without stale closure.
+  // Updated directly in callbacks — no useEffect sync needed.
+  const answerTextRef   = useRef('')
+  const citationsRef    = useRef<RetrievedChunk[]>([])
+  const planRef         = useRef<AgentTask[]>([])
   const currentQueryRef = useRef('')
-
-  // Keep refs in sync
-  useEffect(() => { answerTextRef.current  = answerText  }, [answerText])
-  useEffect(() => { citationsRef.current   = citations   }, [citations])
-  useEffect(() => { planRef.current        = plan        }, [plan])
-  useEffect(() => { currentQueryRef.current = currentQuery }, [currentQuery])
 
   // ── Graph state ─────────────────────────────────────────────────────────────
   const [graphNodes, setGraphNodes]     = useState<GraphNode[]>([])
@@ -114,7 +127,8 @@ export function ResultsPage() {
   // ── Query runner ─────────────────────────────────────────────────────────────
   const runQuery = useCallback(
     async (query: string) => {
-      // Save the current completed exchange to history before resetting
+      // Push completed exchange to history before resetting.
+      // Read directly from refs — they're kept current by the callbacks below.
       if (answerTextRef.current && currentQueryRef.current) {
         setExchanges((prev) => [
           ...prev,
@@ -128,12 +142,19 @@ export function ResultsPage() {
         ])
       }
 
-      savedRef.current = false
+      // Reset all streaming state and refs together
+      savedRef.current      = false
+      answerTextRef.current  = ''
+      citationsRef.current   = []
+      planRef.current        = []
+      currentQueryRef.current = query
+
       setPlan([])
       setStatuses({})
       setAnswerText('')
       setCitations([])
       setGuardrail(null)
+      setChannelFilterApplied(false)
       setCurrentQuery(query)
       setQueryId(crypto.randomUUID())
       setShareOpen(false)
@@ -146,6 +167,7 @@ export function ResultsPage() {
         { query, team_id: user?.team_id ?? 'default', session_id: sessionRef.current },
         {
           plan_ready: (data: ExecutionPlan) => {
+            planRef.current = data.tasks
             setPlan(data.tasks)
             setStatuses(
               Object.fromEntries(
@@ -166,10 +188,13 @@ export function ResultsPage() {
               },
             }))
           },
-          citations: ({ chunks }) => {
+          citations: ({ chunks, channel_filter_applied }) => {
+            citationsRef.current = chunks
             setCitations(chunks)
+            if (channel_filter_applied) setChannelFilterApplied(true)
           },
           answer_chunk: ({ chunk }) => {
+            answerTextRef.current += chunk
             setAnswerText((prev) => prev + chunk)
           },
           guardrail_result: (g) => {
@@ -201,8 +226,11 @@ export function ResultsPage() {
     try {
       const { query, answer, citations: cc } = JSON.parse(raw)
       setCurrentQuery(query)
+      currentQueryRef.current = query
       setAnswerText(answer)
+      answerTextRef.current = answer
       setCitations(cc ?? [])
+      citationsRef.current = cc ?? []
       savedRef.current = true
       return true
     } catch { return false }
@@ -237,12 +265,10 @@ export function ResultsPage() {
   useEffect(() => {
     if (state !== 'complete' || !currentQuery || !answerText || savedRef.current) return
     savedRef.current = true
-    const qid = sessionRef.current
+    const qid     = sessionRef.current
     const payload = JSON.stringify({ query: currentQuery, answer: answerText, citations })
-    try {
-      sessionStorage.setItem(QR_PREFIX + qid, payload)
-      sessionStorage.setItem(textKey(currentQuery), payload)
-    } catch { /* storage full */ }
+    cacheWrite(QR_PREFIX + qid, payload)
+    cacheWrite(textKey(currentQuery), payload)
     navigate({ to: '/query', search: { qid, q: undefined, fresh: false }, replace: true })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
@@ -259,7 +285,7 @@ export function ResultsPage() {
   const isComplete  = state === 'complete'
   const isError     = state === 'error'
   const isActive    = isLoading || isStreaming
-  const hasData     = firstEventArrived.current
+  const hasData     = firstEventArrived
 
   const graphHasContent  = graphNodes.length > 0
   const answerHasContent = !!answerText || plan.length > 0
@@ -269,10 +295,9 @@ export function ResultsPage() {
 
       {/* Search bar */}
       <SearchBox
-        key={currentQuery || initialQuery}
+        value={currentQuery || (initialQuery ?? '')}
         onSubmit={runQuery}
         disabled={isActive}
-        defaultValue={currentQuery || (initialQuery ?? '')}
       />
 
       {/* Idle home state */}
@@ -282,7 +307,7 @@ export function ResultsPage() {
         </div>
       )}
 
-      {/* ── Results layout ─────────────────────────────────────────────────── */}
+      {/* ── Results layout ─────────────────────────────────────────────── */}
       {(currentQuery || exchanges.length > 0) && (
         <>
           {/* Mobile tab bar */}
@@ -354,7 +379,6 @@ export function ResultsPage() {
               {/* ── Current streaming exchange ────────────────────────────── */}
               {currentQuery && (
                 <div className="flex flex-col gap-4">
-                  {/* Show query heading only when there are prior exchanges */}
                   {exchanges.length > 0 && (
                     <p className="text-sm font-semibold text-stone-700 dark:text-stone-300">
                       {currentQuery}
@@ -397,6 +421,10 @@ export function ResultsPage() {
                     </div>
                   )}
 
+                  {channelFilterApplied && isComplete && (
+                    <RBACRestrictedBanner />
+                  )}
+
                   {citations.length > 0 && <Citations chunks={citations} />}
 
                   {isComplete && citations.length > 3 && (
@@ -419,7 +447,6 @@ export function ResultsPage() {
 
               <div ref={bottomRef} />
 
-              {/* Follow-up always visible at bottom once there's any content */}
               {(isComplete || exchanges.length > 0) && (
                 <FollowUp onSubmit={runQuery} disabled={isActive} />
               )}

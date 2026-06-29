@@ -9,7 +9,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from src.auth.deps import require_role
+from src.auth.deps import get_current_user, require_role
 
 logger = logging.getLogger(__name__)
 
@@ -43,20 +43,26 @@ class PatchUserBody(BaseModel):
     role: Optional[str] = None
     is_active: Optional[bool] = None
     name: Optional[str] = None
+    is_owner: Optional[bool] = None
 
 
 @router.get("/users")
-async def list_users(user=Depends(require_role("admin", "org_admin"))) -> dict:
-    """List all users in the default workspace."""
+async def list_users(user=Depends(require_role("admin", "manager"))) -> dict:
+    """List users in the workspace.
+
+    Admins see everyone. Managers see only their own team.
+    """
     try:
-        result = (
+        q = (
             _client()
             .table("users")
-            .select("id, email, name, role, is_active")
+            .select("id, email, name, role, is_owner, is_active, team_id")
             .eq("workspace_id", DEFAULT_WORKSPACE_ID)
             .order("name")
-            .execute()
         )
+        if user.get("role") == "manager":
+            q = q.eq("team_id", user["team_id"])
+        result = q.execute()
         return {"users": result.data}
     except Exception:
         logger.exception("admin: list_users failed")
@@ -64,7 +70,7 @@ async def list_users(user=Depends(require_role("admin", "org_admin"))) -> dict:
 
 
 @router.post("/users", status_code=201)
-async def create_user(body: CreateUserBody, user=Depends(require_role("admin", "org_admin"))) -> dict:
+async def create_user(body: CreateUserBody, user=Depends(require_role("admin"))) -> dict:
     """Invite a new user — password_hash is left None; invite flow sets it later."""
     payload: dict = {
         "workspace_id":  DEFAULT_WORKSPACE_ID,
@@ -89,17 +95,75 @@ async def create_user(body: CreateUserBody, user=Depends(require_role("admin", "
 async def patch_user(
     user_id: str,
     body: PatchUserBody,
-    user=Depends(require_role("admin", "org_admin")),
+    user=Depends(require_role("admin")),
 ) -> dict:
-    """Update role, is_active, or name for a user."""
+    """Update role, is_active, or name for a user.
+
+    Changing is_owner requires the caller to be an owner themselves.
+    Revoking the last owner's is_owner flag is blocked.
+    Changing an owner's role to non-admin is blocked until is_owner is revoked.
+    """
     updates = body.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
     try:
+        sb = _client()
+        target_result = (
+            sb.table("users")
+            .select("is_owner, role")
+            .eq("id", user_id)
+            .eq("workspace_id", DEFAULT_WORKSPACE_ID)
+            .limit(1)
+            .execute()
+        )
+        target_row = target_result.data[0] if target_result.data else None
+        if not target_row:
+            raise HTTPException(status_code=404, detail="User not found")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("admin: patch_user pre-check failed for %s", user_id)
+        raise HTTPException(status_code=500, detail="Failed to validate user")
+
+    target_is_owner = bool(target_row.get("is_owner"))
+    caller_is_owner = bool(user.get("is_owner"))
+
+    # Only owners can grant or revoke is_owner
+    if "is_owner" in updates:
+        if not caller_is_owner:
+            raise HTTPException(status_code=403, detail="Only workspace owners can change owner status")
+        # Prevent revoking the last owner
+        if updates["is_owner"] is False and target_is_owner:
+            try:
+                owner_count = (
+                    sb.table("users")
+                    .select("id", count="exact")
+                    .eq("workspace_id", DEFAULT_WORKSPACE_ID)
+                    .eq("is_owner", True)
+                    .eq("is_active", True)
+                    .execute()
+                )
+                if (owner_count.count or 0) <= 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Cannot revoke the last owner — promote another admin first",
+                    )
+            except HTTPException:
+                raise
+            except Exception:
+                logger.exception("admin: patch_user owner-count check failed")
+
+    # Prevent changing an owner's role to non-admin while they still hold is_owner
+    if updates.get("role") and updates["role"] != "admin" and target_is_owner:
+        raise HTTPException(
+            status_code=409,
+            detail="Revoke owner status before changing the owner's role",
+        )
+
+    try:
         result = (
-            _client()
-            .table("users")
+            sb.table("users")
             .update(updates)
             .eq("id", user_id)
             .eq("workspace_id", DEFAULT_WORKSPACE_ID)
@@ -115,12 +179,63 @@ async def patch_user(
 
 
 @router.delete("/users/{user_id}")
-async def delete_user(user_id: str, user=Depends(require_role("admin", "org_admin"))) -> dict:
-    """Soft-delete a user by setting is_active=False."""
+async def delete_user(user_id: str, user=Depends(require_role("admin"))) -> dict:
+    """Soft-delete a user by setting is_active=False.
+
+    Only owners can remove other owners. No one can remove themselves.
+    The last owner cannot be removed.
+    """
+    if user_id == user["id"]:
+        raise HTTPException(status_code=409, detail="Cannot remove yourself")
+
+    try:
+        sb = _client()
+        target_result = (
+            sb.table("users")
+            .select("is_owner")
+            .eq("id", user_id)
+            .eq("workspace_id", DEFAULT_WORKSPACE_ID)
+            .limit(1)
+            .execute()
+        )
+        if not target_result.data:
+            raise HTTPException(status_code=404, detail="User not found")
+        target_is_owner = bool(target_result.data[0].get("is_owner"))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("admin: delete_user pre-check failed for %s", user_id)
+        raise HTTPException(status_code=500, detail="Failed to deactivate user")
+
+    if target_is_owner:
+        if not user.get("is_owner"):
+            raise HTTPException(
+                status_code=403,
+                detail="Only workspace owners can remove other owners",
+            )
+        # Block removing the last owner
+        try:
+            owner_count = (
+                sb.table("users")
+                .select("id", count="exact")
+                .eq("workspace_id", DEFAULT_WORKSPACE_ID)
+                .eq("is_owner", True)
+                .eq("is_active", True)
+                .execute()
+            )
+            if (owner_count.count or 0) <= 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Cannot remove the last owner — promote another admin first",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("admin: delete_user last-owner check failed for %s", user_id)
+
     try:
         result = (
-            _client()
-            .table("users")
+            sb.table("users")
             .update({"is_active": False})
             .eq("id", user_id)
             .eq("workspace_id", DEFAULT_WORKSPACE_ID)
@@ -152,17 +267,22 @@ class PatchChannelBody(BaseModel):
 
 
 @router.get("/channels")
-async def list_channels(user=Depends(require_role("admin", "org_admin"))) -> dict:
-    """List all channels in the default workspace."""
+async def list_channels(user=Depends(require_role("admin", "manager"))) -> dict:
+    """List channels in the workspace.
+
+    Admins see all channels. Managers see only channels belonging to their team.
+    """
     try:
-        result = (
+        q = (
             _client()
             .table("channels")
             .select("id, name, team_id, source_type, sensitivity, workspace_id")
             .eq("workspace_id", DEFAULT_WORKSPACE_ID)
             .order("name")
-            .execute()
         )
+        if user.get("role") == "manager":
+            q = q.eq("team_id", user["team_id"])
+        result = q.execute()
         return {"channels": result.data}
     except Exception:
         logger.exception("admin: list_channels failed")
@@ -170,7 +290,7 @@ async def list_channels(user=Depends(require_role("admin", "org_admin"))) -> dic
 
 
 @router.post("/channels", status_code=201)
-async def create_channel(body: CreateChannelBody, user=Depends(require_role("admin", "org_admin"))) -> dict:
+async def create_channel(body: CreateChannelBody, user=Depends(require_role("admin"))) -> dict:
     """Create a new channel in the default workspace."""
     payload: dict = {
         "workspace_id": DEFAULT_WORKSPACE_ID,
@@ -195,12 +315,34 @@ async def create_channel(body: CreateChannelBody, user=Depends(require_role("adm
 async def patch_channel(
     channel_id: str,
     body: PatchChannelBody,
-    user=Depends(require_role("admin", "org_admin")),
+    user=Depends(require_role("admin", "manager")),
 ) -> dict:
-    """Update name or sensitivity for a channel."""
+    """Update name or sensitivity for a channel.
+
+    Managers may only edit channels that belong to their own team.
+    """
     updates = body.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+
+    if user.get("role") == "manager":
+        try:
+            check = (
+                _client()
+                .table("channels")
+                .select("team_id")
+                .eq("id", channel_id)
+                .eq("workspace_id", DEFAULT_WORKSPACE_ID)
+                .limit(1)
+                .execute()
+            )
+        except Exception:
+            logger.exception("manager: patch_channel team-check failed for %s", channel_id)
+            raise HTTPException(status_code=500, detail="Failed to validate channel")
+        if not check.data:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        if check.data[0].get("team_id") != user.get("team_id"):
+            raise HTTPException(status_code=403, detail="Cannot edit channels outside your team")
 
     try:
         result = (
@@ -221,7 +363,7 @@ async def patch_channel(
 
 
 @router.delete("/channels/{channel_id}")
-async def delete_channel(channel_id: str, user=Depends(require_role("admin", "org_admin"))) -> dict:
+async def delete_channel(channel_id: str, user=Depends(require_role("admin"))) -> dict:
     """Hard-delete a channel."""
     try:
         result = (
@@ -254,7 +396,7 @@ async def get_audit_log(
     limit: int = Query(default=50, ge=1, le=200),
     action: str = Query(default=""),
     target_type: str = Query(default=""),
-    user=Depends(require_role("admin", "org_admin")),
+    user=Depends(require_role("admin")),
 ) -> dict:
     """Paginated audit log from rbac_audit_log."""
     offset = (page - 1) * limit

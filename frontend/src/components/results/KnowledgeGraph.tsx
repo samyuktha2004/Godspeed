@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { GraphNode, GraphEdge } from '@/types/api'
+import { cn } from '@/lib/utils'
 
 // ─── Colour palette ───────────────────────────────────────────────────────────
 
@@ -44,6 +45,7 @@ export function KnowledgeGraph({ nodes, edges, streaming, onNodeClick, onNodeHov
   const graphRef = useRef<any>(null)
   // Accumulates data that arrives before the async canvas is ready
   const pendingRef = useRef<{ nodes: GraphNode[]; edges: GraphEdge[] }>({ nodes: [], edges: [] })
+  const [tableView, setTableView] = useState(false)
 
   const pushData = (n: GraphNode[], e: GraphEdge[]) => {
     if (!graphRef.current) return
@@ -127,9 +129,77 @@ export function KnowledgeGraph({ nodes, edges, streaming, onNodeClick, onNodeHov
   }, [nodes, edges])
 
   const isEmpty = nodes.length === 0
+  const graphLabel = isEmpty
+    ? 'Knowledge graph — no data yet'
+    : `Knowledge graph — ${nodes.length} node${nodes.length !== 1 ? 's' : ''}, ${edges.length} connection${edges.length !== 1 ? 's' : ''}`
+
+  // Group edges by source and build an id→node map for O(1) table-view lookups
+  const { edgesBySource, nodesById } = useMemo(() => {
+    const edgesBySource: Record<string, GraphEdge[]> = {}
+    const nodesById: Record<string, GraphNode> = {}
+    for (const e of edges) (edgesBySource[e.from] ??= []).push(e)
+    for (const n of nodes) nodesById[n.id] = n
+    return { edgesBySource, nodesById }
+  }, [edges, nodes])
 
   return (
-    <div className={`relative h-full w-full overflow-hidden${className ? ` ${className}` : ''}`}>
+    <div className={cn('relative h-full w-full overflow-hidden', className)}>
+
+      {/* Accessibility toolbar — always visible, sits above canvas */}
+      {!isEmpty && (
+        <div className="absolute right-2 top-2 z-10">
+          <button
+            onClick={() => setTableView((v) => !v)}
+            className="rounded border border-surface-subtle bg-white/90 px-2 py-1 text-xs text-stone-600 shadow-sm backdrop-blur-sm hover:bg-stone-50 dark:bg-stone-900/90 dark:text-stone-300 dark:hover:bg-stone-800"
+            aria-pressed={tableView}
+          >
+            {tableView ? 'Show graph' : 'View as table'}
+          </button>
+        </div>
+      )}
+
+      {/* Table view — accessible alternative to the canvas */}
+      {tableView && !isEmpty && (
+        <div className="h-full w-full overflow-y-auto p-4">
+          <table className="w-full text-sm">
+            <caption className="mb-2 text-left text-xs font-semibold text-stone-500">
+              {graphLabel}
+            </caption>
+            <thead>
+              <tr className="border-b border-surface-subtle text-left text-xs text-stone-400">
+                <th className="pb-2 pr-4 font-medium">Node</th>
+                <th className="pb-2 pr-4 font-medium">Type</th>
+                <th className="pb-2 font-medium">Connections</th>
+              </tr>
+            </thead>
+            <tbody>
+              {nodes.map((n) => (
+                <tr
+                  key={n.id}
+                  className="cursor-pointer border-b border-surface-subtle hover:bg-stone-50 dark:hover:bg-stone-900"
+                  onClick={() => onNodeClick(n)}
+                >
+                  <td className="py-2 pr-4 font-medium text-stone-800 dark:text-stone-200">{n.name}</td>
+                  <td className="py-2 pr-4">
+                    <span
+                      className="inline-block h-2 w-2 rounded-full mr-1.5"
+                      style={{ backgroundColor: NODE_COLOURS[n.label] ?? '#94a3b8' }}
+                      aria-hidden="true"
+                    />
+                    {n.label}
+                  </td>
+                  <td className="py-2 text-stone-500">
+                    {(edgesBySource[n.id] ?? []).map((e) => {
+                      const target = nodesById[e.to]
+                      return target ? `${e.rel} → ${target.name}` : null
+                    }).filter(Boolean).join(', ') || '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Empty state overlay — removed once first node arrives */}
       {isEmpty && (
@@ -149,11 +219,12 @@ export function KnowledgeGraph({ nodes, edges, streaming, onNodeClick, onNodeHov
         </div>
       )}
 
-      {/* Canvas — always present so force-graph can attach */}
+      {/* Canvas — always present so force-graph can attach; hidden in table view */}
       <div
         ref={containerRef}
-        className="h-full w-full"
-        aria-label="Knowledge graph visualisation"
+        role="img"
+        aria-label={graphLabel}
+        className={`h-full w-full${tableView ? ' hidden' : ''}`}
       />
     </div>
   )

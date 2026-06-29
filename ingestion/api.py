@@ -8,6 +8,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
+from src.auth.deps import get_current_user, require_role
+
 from ingestion.models import (
     ConfluenceIngestRequest,
     GithubIngestRequest,
@@ -15,7 +17,6 @@ from ingestion.models import (
     IngestJobStatus,
     IngestSourcePayload,
 )
-from src.auth.deps import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -23,17 +24,6 @@ router = APIRouter(prefix="/ingest", tags=["ingest"])
 
 # Cap PDF uploads — keeps Celery payload sane and prevents memory blowup
 _MAX_PDF_BYTES = 25 * 1024 * 1024  # 25 MB
-
-
-def _assert_team_or_admin(user: dict, payload_team_id: str) -> None:
-    """Reject if the user is neither acting on their own team nor an admin."""
-    if user.get("role") in ("admin", "org_admin"):
-        return
-    if user.get("team_id") != payload_team_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Cannot ingest into a team you do not belong to",
-        )
 
 
 def _dispatch(payload: IngestSourcePayload) -> IngestJobResponse:
@@ -61,11 +51,7 @@ def _dispatch(payload: IngestSourcePayload) -> IngestJobResponse:
 
 
 @router.post("/confluence", response_model=IngestJobResponse)
-async def ingest_confluence(
-    request: ConfluenceIngestRequest,
-    user: dict = Depends(get_current_user),
-) -> IngestJobResponse:
-    _assert_team_or_admin(user, request.team_id)
+async def ingest_confluence(request: ConfluenceIngestRequest, _user: dict = Depends(require_role("admin"))) -> IngestJobResponse:
     payload = IngestSourcePayload(
         source_type="confluence",
         team_id=request.team_id,
@@ -76,11 +62,7 @@ async def ingest_confluence(
 
 
 @router.post("/github", response_model=IngestJobResponse)
-async def ingest_github(
-    request: GithubIngestRequest,
-    user: dict = Depends(get_current_user),
-) -> IngestJobResponse:
-    _assert_team_or_admin(user, request.team_id)
+async def ingest_github(request: GithubIngestRequest, _user: dict = Depends(require_role("admin"))) -> IngestJobResponse:
     payload = IngestSourcePayload(
         source_type="github",
         team_id=request.team_id,
@@ -95,14 +77,7 @@ async def ingest_github(
 
 
 @router.post("/upload", response_model=IngestJobResponse)
-async def ingest_pdf(
-    team_id: str,
-    file: UploadFile,
-    channel_id: Optional[str] = None,
-    user: dict = Depends(get_current_user),
-) -> IngestJobResponse:
-    _assert_team_or_admin(user, team_id)
-
+async def ingest_pdf(team_id: str, file: UploadFile, channel_id: Optional[str] = None, _user: dict = Depends(require_role("admin"))) -> IngestJobResponse:
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
 
@@ -132,10 +107,7 @@ async def ingest_pdf(
 
 
 @router.get("/jobs/{job_id}", response_model=IngestJobResponse)
-async def get_job_status(
-    job_id: str,
-    user: dict = Depends(get_current_user),
-) -> IngestJobResponse:
+async def get_job_status(job_id: str, user: dict = Depends(get_current_user)) -> IngestJobResponse:
     from ingestion.storage.supabase_store import get_job
 
     record = get_job(job_id)

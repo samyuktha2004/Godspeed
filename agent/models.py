@@ -63,6 +63,7 @@ class RetrievedChunk(BaseModel):
     score: float
     reranker_score: Optional[float] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    title: Optional[str] = None
 
 
 class AgentResult(BaseModel):

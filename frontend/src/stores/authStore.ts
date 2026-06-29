@@ -4,10 +4,11 @@ import type { User } from '@/types/user'
 
 interface AuthState {
   user:            User | null
-  // Derived: true iff user !== null. Using a getter via computed keeps it in sync.
   isAuthenticated: boolean
-  login:  (user: User) => void
-  logout: () => void
+  setupComplete:   boolean
+  login:           (user: User) => void
+  logout:          () => void
+  markSetupComplete: () => void
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -15,12 +16,16 @@ export const useAuthStore = create<AuthState>()(
     (set) => ({
       user:            null,
       isAuthenticated: false,
-      login:  (user) => set({ user, isAuthenticated: true }),
-      logout: () => set({ user: null, isAuthenticated: false }),
+      setupComplete:   false,
+
+      login: (user) => set({ user, isAuthenticated: true }),
+
+      logout: () => set({ user: null, isAuthenticated: false, setupComplete: false }),
+
+      markSetupComplete: () => set({ setupComplete: true }),
     }),
     {
       name: 'godspeed-auth',
-      // Re-derive isAuthenticated from persisted user on rehydration
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.isAuthenticated = state.user !== null

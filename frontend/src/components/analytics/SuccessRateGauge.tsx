@@ -3,13 +3,19 @@ import { RadialBarChart, RadialBar, ResponsiveContainer } from 'recharts'
 import { apiFetch } from '@/lib/http'
 import { cn } from '@/lib/utils'
 
-async function fetchRate(): Promise<{ success_rate: number; unique_users: number; avg_response_time_ms: number }> {
-  const res = await apiFetch('/api/analytics/queries?date_range=30d')
+async function fetchRate(teamId: string | null | undefined): Promise<{ success_rate: number; unique_users: number; avg_response_time_ms: number }> {
+  const params = new URLSearchParams({ date_range: '30d' })
+  if (teamId) params.set('team_id', teamId)
+  const res = await apiFetch(`/api/analytics/queries?${params}`)
   return res.json()
 }
 
-export function SuccessRateGauge() {
-  const { data, isLoading } = useQuery({ queryKey: ['analytics-trend'], queryFn: fetchRate, staleTime: 300_000 })
+export function SuccessRateGauge({ teamId }: { teamId?: string | null }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['analytics-trend', teamId ?? 'all'],
+    queryFn: () => fetchRate(teamId),
+    staleTime: 300_000,
+  })
 
   const rate   = data?.success_rate ?? 0
   const pct    = Math.round(rate * 100)

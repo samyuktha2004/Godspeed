@@ -19,8 +19,10 @@ interface EscalationResponse {
   total:        number
 }
 
-async function fetchEscalations(): Promise<EscalationResponse> {
-  const res = await apiFetch('/api/analytics/escalations?limit=50')
+async function fetchEscalations(teamId: string | null | undefined): Promise<EscalationResponse> {
+  const params = new URLSearchParams({ limit: '50' })
+  if (teamId) params.set('team_id', teamId)
+  const res = await apiFetch(`/api/analytics/escalations?${params}`)
   return res.json()
 }
 
@@ -37,10 +39,10 @@ const GAP_LABELS: Record<Escalation['gap_type'], string> = {
   out_of_scope:      'Out of scope',
 }
 
-export function EscalationTable() {
+export function EscalationTable({ teamId }: { teamId?: string | null }) {
   const { data, isLoading } = useQuery({
-    queryKey:  ['analytics-escalations'],
-    queryFn:   fetchEscalations,
+    queryKey:  ['analytics-escalations', teamId ?? 'all'],
+    queryFn:   () => fetchEscalations(teamId),
     staleTime: 120_000,
   })
 

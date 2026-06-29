@@ -2,16 +2,18 @@ import { Link, useLocation, useNavigate } from '@tanstack/react-router'
 import { useUIStore } from '@/stores/uiStore'
 import { useAuth } from '@/hooks/useAuth'
 import { NotificationBell } from './NotificationBell'
-import { cn } from '@/lib/utils'
+import { cn, isAdmin, isManager } from '@/lib/utils'
 
-const NAV_LINKS = [
+const BASE_NAV = [
   { to: '/',          label: 'Home'      },
   { to: '/query',     label: 'Ask'       },
   { to: '/workspace', label: 'History'   },
   { to: '/analytics', label: 'Analytics' },
-  { to: '/admin',     label: 'Admin'     },
   { to: '/settings',  label: 'Settings'  },
 ]
+
+const ADMIN_NAV   = { to: '/admin', label: 'Admin' }
+const TEAM_NAV    = { to: '/team',  label: 'Team'  }
 
 export function NavBar() {
   const theme       = useUIStore((s) => s.theme)
@@ -19,6 +21,11 @@ export function NavBar() {
   const { pathname } = useLocation()
   const navigate    = useNavigate()
   const { user, signOut } = useAuth()
+  const navLinks = isAdmin(user)
+    ? [...BASE_NAV, TEAM_NAV, ADMIN_NAV]
+    : isManager(user)
+    ? [...BASE_NAV, TEAM_NAV]
+    : BASE_NAV
 
   const handleSignOut = async () => {
     await signOut()
@@ -33,7 +40,7 @@ export function NavBar() {
         </Link>
 
         <nav className="flex flex-1 items-center gap-1 overflow-x-auto">
-          {NAV_LINKS.map(({ to, label }) => {
+          {navLinks.map(({ to, label }) => {
             const active = to === '/' ? pathname === '/' : pathname.startsWith(to)
             return (
               <Link

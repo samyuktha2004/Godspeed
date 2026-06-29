@@ -52,7 +52,7 @@ async function handleErrorResponse(res: Response): Promise<never> {
       break
     }
     case 403:
-      // RBAC — components handle this via RBACRestrictedBanner; no toast needed
+      addToast({ type: 'error', message: message || 'You don\'t have permission to do this' })
       break
     case 502:
     case 503:

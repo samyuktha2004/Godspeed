@@ -1,152 +1,133 @@
-import { useState } from 'react'
+import { useEffect } from 'react'
 import { useForm } from 'react-hook-form'
-import { WorkspaceSettings } from '@/types/settings'
+import { z } from 'zod'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { useQuery, useMutation } from '@tanstack/react-query'
+import { apiFetch } from '@/lib/http'
+import { useUIStore } from '@/stores/uiStore'
+import { useAuth } from '@/hooks/useAuth'
+import { isOwner } from '@/lib/utils'
+import type { WorkspaceSettings } from '@/types/settings'
+
+const schema = z.object({
+  name:              z.string().min(2, 'Name is required'),
+  slug:              z.string().min(2, 'Slug is required').regex(/^[a-z0-9-]+$/, 'Lowercase letters, numbers, hyphens only'),
+  description:       z.string().optional(),
+  max_team_members:  z.coerce.number().int().positive().optional().or(z.literal('')),
+  max_channels:      z.coerce.number().int().positive().optional().or(z.literal('')),
+})
+type Fields = z.infer<typeof schema>
+
+async function fetchWorkspace(): Promise<WorkspaceSettings> {
+  const res = await apiFetch('/api/admin/workspace')
+  return res.json()
+}
+
+async function updateWorkspace(data: Partial<WorkspaceSettings>): Promise<WorkspaceSettings> {
+  const res = await apiFetch('/api/admin/workspace', {
+    method:  'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(data),
+  })
+  return res.json()
+}
+
+const LABEL  = 'block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1'
+const INPUT  = 'block w-full rounded border border-surface-subtle bg-white px-3 py-2 text-sm text-stone-900 placeholder-stone-400 focus:outline-brand dark:border-stone-600 dark:bg-stone-800 dark:text-white'
 
 export function AdminWorkspaceSettings() {
-  const { register, handleSubmit, formState: { errors } } = useForm<WorkspaceSettings>({
-    defaultValues: {
-      name: 'Godspeed',
-      slug: 'godspeed',
-      description: 'Engineering knowledge base',
-    },
-  })
-  const [isSaving, setIsSaving] = useState(false)
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const addToast = useUIStore((s) => s.addToast)
+  const { user }  = useAuth()
+  const canDelete = isOwner(user)
 
-  const onSubmit = async (data: WorkspaceSettings) => {
-    setIsSaving(true)
-    setMessage(null)
-    try {
-      // TODO: PATCH /api/workspace/settings
-      console.log('Update workspace settings:', data)
-      setMessage({ type: 'success', text: 'Workspace settings updated' })
-    } catch (err) {
-      setMessage({
-        type: 'error',
-        text: err instanceof Error ? err.message : 'Failed to update settings',
-      })
-    } finally {
-      setIsSaving(false)
-    }
-  }
+  const { data: workspace } = useQuery({
+    queryKey: ['admin-workspace'],
+    queryFn:  fetchWorkspace,
+    staleTime: 60_000,
+  })
+
+  const { register, handleSubmit, reset, formState: { errors, isDirty } } = useForm<Fields>({
+    resolver: zodResolver(schema),
+  })
+
+  useEffect(() => {
+    if (workspace) reset(workspace)
+  }, [workspace, reset])
+
+  const save = useMutation({
+    mutationFn: updateWorkspace,
+    onSuccess:  () => addToast({ type: 'success', message: 'Workspace settings saved' }),
+    onError:    () => addToast({ type: 'error',   message: 'Failed to save settings' }),
+  })
+
+  const onSubmit = (data: Fields) => save.mutate(data as Partial<WorkspaceSettings>)
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 p-6">
-      {/* Workspace Info */}
-      <div>
-        <h3 className="mb-4 text-sm font-semibold">Workspace Settings</h3>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300">
-              Workspace Name
-            </label>
-            <input
-              type="text"
-              {...register('name', { required: 'Name is required' })}
-              className="mt-1 block w-full rounded border border-stone-300 bg-white px-3 py-2 text-stone-900 shadow-sm placeholder-stone-400 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand dark:border-stone-600 dark:bg-stone-800 dark:text-white"
-            />
-            {errors.name && <p className="mt-1 text-xs text-red-500">{errors.name.message}</p>}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300">
-              URL Slug
-            </label>
-            <input
-              type="text"
-              {...register('slug', { required: 'Slug is required' })}
-              className="mt-1 block w-full rounded border border-stone-300 bg-white px-3 py-2 font-mono text-sm text-stone-900 shadow-sm placeholder-stone-400 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand dark:border-stone-600 dark:bg-stone-800 dark:text-white"
-            />
-            {errors.slug && <p className="mt-1 text-xs text-red-500">{errors.slug.message}</p>}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300">
-              Description
-            </label>
-            <textarea
-              {...register('description')}
-              rows={3}
-              className="mt-1 block w-full rounded border border-stone-300 bg-white px-3 py-2 text-stone-900 shadow-sm placeholder-stone-400 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand dark:border-stone-600 dark:bg-stone-800 dark:text-white"
-            />
-          </div>
+    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-8 p-6">
+      {/* Basic info */}
+      <div className="flex flex-col gap-4">
+        <p className="text-sm font-medium">Workspace info</p>
+        <div>
+          <label className={LABEL}>Name</label>
+          <input {...register('name')} type="text" className={INPUT} />
+          {errors.name && <p className="mt-1 text-xs text-red-600">{errors.name.message}</p>}
+        </div>
+        <div>
+          <label className={LABEL}>URL slug</label>
+          <input {...register('slug')} type="text" className={INPUT} />
+          {errors.slug && <p className="mt-1 text-xs text-red-600">{errors.slug.message}</p>}
+          <p className="mt-1 text-xs text-stone-400">Lowercase letters, numbers, and hyphens only.</p>
+        </div>
+        <div>
+          <label className={LABEL}>Description</label>
+          <textarea {...register('description')} rows={3} className={INPUT} />
         </div>
       </div>
 
       {/* Limits */}
-      <div className="border-t border-stone-200 pt-6 dark:border-stone-700">
-        <h3 className="mb-4 text-sm font-semibold">Workspace Limits</h3>
+      <div className="flex flex-col gap-4 border-t border-surface-subtle pt-6">
+        <p className="text-sm font-medium">Limits</p>
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300">
-              Max Team Members
-            </label>
-            <input
-              type="number"
-              {...register('max_team_members')}
-              className="mt-1 block w-full rounded border border-stone-300 bg-white px-3 py-2 text-stone-900 shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand dark:border-stone-600 dark:bg-stone-800 dark:text-white"
-            />
-            <p className="mt-1 text-xs text-stone-500">Leave empty for unlimited</p>
+            <label className={LABEL}>Max team members</label>
+            <input {...register('max_team_members')} type="number" min={1} className={INPUT} placeholder="Unlimited" />
           </div>
-
           <div>
-            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300">
-              Max Channels
-            </label>
-            <input
-              type="number"
-              {...register('max_channels')}
-              className="mt-1 block w-full rounded border border-stone-300 bg-white px-3 py-2 text-stone-900 shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand dark:border-stone-600 dark:bg-stone-800 dark:text-white"
-            />
-            <p className="mt-1 text-xs text-stone-500">Leave empty for unlimited</p>
+            <label className={LABEL}>Max channels</label>
+            <input {...register('max_channels')} type="number" min={1} className={INPUT} placeholder="Unlimited" />
           </div>
         </div>
       </div>
 
-      {/* Message */}
-      {message && (
-        <div
-          className={`rounded-md p-3 text-sm ${
-            message.type === 'success'
-              ? 'border border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950 dark:text-green-200'
-              : 'border border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200'
-          }`}
-        >
-          {message.text}
-        </div>
-      )}
-
-      {/* Save Button */}
-      <div className="border-t border-stone-200 pt-6 dark:border-stone-700">
+      <div>
         <button
           type="submit"
-          disabled={isSaving}
-          className="rounded bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-50"
+          disabled={!isDirty || save.isPending}
+          className="rounded-lg bg-brand px-5 py-2 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-60"
         >
-          {isSaving ? 'Saving...' : 'Save Settings'}
+          {save.isPending ? 'Saving…' : 'Save changes'}
         </button>
       </div>
 
-      {/* Danger Zone */}
-      <div className="border-t border-stone-200 pt-6 dark:border-stone-700">
-        <h3 className="mb-4 text-sm font-semibold text-red-600 dark:text-red-400">Danger Zone</h3>
-        <div className="space-y-3">
-            <div className="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-stone-900">
-            <p className="text-sm font-medium text-red-900 dark:text-red-100">
-              Delete this workspace
-            </p>
-            <p className="mt-1 text-xs text-red-700 dark:text-red-300">
-              This action cannot be undone. All data will be permanently deleted.
+      {/* Danger zone — workspace owner only */}
+      {canDelete && (
+        <div className="flex flex-col gap-3 rounded-xl border border-red-200 p-4 dark:border-red-900">
+          <p className="text-sm font-semibold text-red-700 dark:text-red-400">Danger zone</p>
+          <div>
+            <p className="text-sm font-medium text-stone-700 dark:text-stone-300">Delete this workspace</p>
+            <p className="mt-0.5 text-xs text-stone-500">
+              Permanently deletes all data, users, and documents. This cannot be undone.
             </p>
             <button
               type="button"
-              className="mt-3 rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700"
+              className="mt-3 rounded-lg bg-red-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-red-700"
+              onClick={() => window.confirm('Delete this workspace? This cannot be undone.') && addToast({ type: 'error', message: 'Workspace deletion is disabled in this environment.' })}
             >
-              Delete Workspace
+              Delete workspace
             </button>
           </div>
         </div>
-      </div>
+      )}
     </form>
   )
 }

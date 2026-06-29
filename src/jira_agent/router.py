@@ -6,8 +6,9 @@ from src.utils.logger import get_logger as _get_logger
 import logging
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 
+from src.auth.deps import require_role
 from src.jira_agent.config import jira_config
 from src.jira_agent.tasks import jira_process_issue, jira_sync_project
 
@@ -59,7 +60,7 @@ async def jira_webhook(
 
 
 @router.post("/jira/sync/{project_key}")
-async def trigger_jira_sync(project_key: str) -> dict[str, Any]:
+async def trigger_jira_sync(project_key: str, _user: dict = Depends(require_role("admin"))) -> dict[str, Any]:
     task = jira_sync_project.delay(project_key, jira_config.team_id)
     logger.info("jira_sync_triggered", extra={"task_id": task.id, "project_key": project_key})
     return {"status": "accepted", "task_id": task.id, "project_key": project_key}

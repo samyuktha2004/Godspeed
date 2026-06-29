@@ -9,9 +9,10 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
+from src.auth.deps import get_current_user, require_role
 from src.config import settings
 from src.utils.logger import get_logger
 
@@ -38,8 +39,12 @@ def _cutoff(date_range: DateRange) -> datetime | None:
     return datetime.utcnow() - timedelta(days=days)
 
 
-async def _load_events(date_range: DateRange) -> list[dict]:
-    """Return query events from Redis. Returns [] if Redis is unavailable."""
+def _is_admin(user: dict) -> bool:
+    return user.get("role") == "admin"
+
+
+async def _load_events(date_range: DateRange, team_id: str | None = None) -> list[dict]:
+    """Return query events from Redis, optionally scoped to a team."""
     try:
         r = await _redis()
         raw_list = await r.lrange(REDIS_QUERY_KEY, 0, 9999)
@@ -56,10 +61,19 @@ async def _load_events(date_range: DateRange) -> list[dict]:
                 ts = datetime.fromisoformat(ev.get("created_at", "1970-01-01T00:00:00"))
                 if ts < cutoff:
                     continue
+            if team_id and ev.get("team_id") != team_id:
+                continue
             events.append(ev)
         except Exception:
             continue
     return events
+
+
+def _effective_team(user: dict, requested: str | None) -> str | None:
+    """Admins may pass any team_id; everyone else is locked to their own team."""
+    if _is_admin(user):
+        return requested
+    return user.get("team_id")
 
 
 # ---------------------------------------------------------------------------
@@ -67,8 +81,12 @@ async def _load_events(date_range: DateRange) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 @router.get("/queries")
-async def get_queries(date_range: DateRange = Query(default="30d")) -> dict:
-    events = await _load_events(date_range)
+async def get_queries(
+    date_range: DateRange = Query(default="30d"),
+    team_id:    str | None = Query(default=None),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    events = await _load_events(date_range, team_id=_effective_team(user, team_id))
 
     if not events:
         return {
@@ -83,7 +101,7 @@ async def get_queries(date_range: DateRange = Query(default="30d")) -> dict:
     successful   = sum(1 for e in events if e.get("success", True))
     durations    = [e["duration_ms"] for e in events if "duration_ms" in e]
     avg_duration = int(sum(durations) / len(durations)) if durations else 0
-    users        = {e.get("team_id", "unknown") for e in events}
+    users        = {e.get("user_id", e.get("team_id", "unknown")) for e in events}
 
     daily: dict[str, int] = {}
     for ev in events:
@@ -105,7 +123,10 @@ async def get_queries(date_range: DateRange = Query(default="30d")) -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/topics")
-async def get_topics(limit: int = Query(default=10, ge=1, le=50)) -> dict:
+async def get_topics(
+    limit:   int = Query(default=10, ge=1, le=50),
+    user: dict = Depends(get_current_user),
+) -> dict:
     try:
         r = await _redis()
         results = await r.zrevrange("gs:topics", 0, limit - 1, withscores=True)
@@ -127,8 +148,6 @@ _EMPTY_DOMAINS = [
 
 
 async def _compute_freshness() -> float | None:
-    """Fraction of documents ingested/updated within the last 30 days.
-    Returns None if Supabase is unavailable or unconfigured."""
     try:
         from src.auth.db import _client as _sb_client
         sb = _sb_client()
@@ -146,7 +165,9 @@ async def _compute_freshness() -> float | None:
 
 
 @router.get("/knowledge-health")
-async def get_knowledge_health() -> dict:
+async def get_knowledge_health(
+    user: dict = Depends(get_current_user),
+) -> dict:
     rows: list[dict] = []
     try:
         # Reuse the shared driver instead of opening a new pool per request.
@@ -192,7 +213,9 @@ async def get_knowledge_health() -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/dependencies")
-async def get_dependencies() -> dict:
+async def get_dependencies(
+    user: dict = Depends(get_current_user),
+) -> dict:
     rows: list[dict] = []
     try:
         # Reuse the shared driver — matches /knowledge-health and /coverage-gaps.
@@ -222,7 +245,7 @@ async def get_dependencies() -> dict:
     for r in rows:
         name = r.get("name")
         if not name:
-            continue  # skip nodes without a name property
+            continue
         deps.append({
             "name":            str(name),
             "type":            (r.get("type") or "service").lower(),
@@ -240,8 +263,9 @@ async def get_dependencies() -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/coverage-gaps")
-async def get_coverage_gaps() -> dict:
-    """Least-documented entities per label — shows where ingestion has the highest impact."""
+async def get_coverage_gaps(
+    user: dict = Depends(get_current_user),
+) -> dict:
     rows: list[dict] = []
     try:
         from graph_store.writer import get_driver
@@ -276,22 +300,33 @@ async def get_coverage_gaps() -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/escalations")
-async def get_escalations(limit: int = Query(default=50, ge=1, le=200)) -> dict:
+async def get_escalations(
+    limit:   int = Query(default=50, ge=1, le=200),
+    team_id: str | None = Query(default=None),
+    user: dict = Depends(get_current_user),
+) -> dict:
     try:
         r = await _redis()
-        raw_list = await r.lrange("gs:escalations", 0, limit - 1)
-        total    = await r.llen("gs:escalations")
+        raw_list = await r.lrange("gs:escalations", 0, -1)
+        total_all = await r.llen("gs:escalations")
     except Exception as exc:
         logger.warning("escalations_redis_read_failed", extra={"error": str(exc)})
         return {"escalations": [], "total": 0}
 
+    effective = _effective_team(user, team_id)
     escalations = []
     for raw in raw_list:
         try:
-            escalations.append(json.loads(raw))
+            ev = json.loads(raw)
+            if effective and ev.get("team_id") != effective:
+                continue
+            escalations.append(ev)
+            if len(escalations) >= limit:
+                break
         except Exception:
             continue
-    return {"escalations": escalations, "total": total}
+
+    return {"escalations": escalations, "total": len(escalations) if effective else total_all}
 
 
 # ---------------------------------------------------------------------------
@@ -303,14 +338,16 @@ async def export_analytics(
     scope:      str       = Query(default="full"),
     format:     str       = Query(default="csv"),
     date_range: DateRange = Query(default="30d"),
+    team_id:    str | None = Query(default=None),
+    user: dict = Depends(require_role("admin")),
 ) -> StreamingResponse:
-    events = await _load_events(date_range)
+    events = await _load_events(date_range, team_id=_effective_team(user, team_id))
 
     if format == "csv":
         buf = io.StringIO()
         writer = csv.DictWriter(
             buf,
-            fieldnames=["created_at", "query", "team_id", "success", "duration_ms"],
+            fieldnames=["created_at", "query", "team_id", "user_id", "success", "duration_ms"],
         )
         writer.writeheader()
         for ev in events:
@@ -318,6 +355,7 @@ async def export_analytics(
                 "created_at":  ev.get("created_at", ""),
                 "query":       ev.get("query", ""),
                 "team_id":     ev.get("team_id", ""),
+                "user_id":     ev.get("user_id", ""),
                 "success":     ev.get("success", True),
                 "duration_ms": ev.get("duration_ms", 0),
             })
@@ -325,7 +363,6 @@ async def export_analytics(
         media   = "text/csv"
         suffix  = "csv"
     else:
-        # PDF renderer (e.g. weasyprint) not yet wired — return CSV fallback
         content = b"PDF export not yet implemented. Use format=csv.\n"
         media   = "text/plain"
         suffix  = "txt"

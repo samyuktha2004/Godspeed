@@ -8,17 +8,23 @@ import { lazy } from 'react'
 
 import App from '@/App'
 import { useAuthStore } from '@/stores/authStore'
+import { isAdmin, isManager, isOwner } from '@/lib/utils'
 
 const Home          = lazy(() => import('@/pages/Home'))
+const TeamPage      = lazy(() => import('@/pages/TeamPage'))
 const QueryPage     = lazy(() => import('@/pages/QueryPage'))
 const Analytics     = lazy(() => import('@/pages/AnalyticsPage'))
 const Admin         = lazy(() => import('@/pages/AdminPage'))
 const Workspace     = lazy(() => import('@/pages/WorkspacePage'))
 const Settings      = lazy(() => import('@/pages/SettingsPage'))
 const Login         = lazy(() => import('@/pages/LoginPage'))
-const OAuthCallback   = lazy(() => import('@/pages/OAuthCallbackPage'))
-const AcceptInvite    = lazy(() => import('@/pages/AcceptInvitePage'))
-const NotFound        = lazy(() => import('@/pages/NotFoundPage'))
+const Register      = lazy(() => import('@/pages/RegisterPage'))
+const Setup         = lazy(() => import('@/pages/SetupPage'))
+const OAuthCallback = lazy(() => import('@/pages/OAuthCallbackPage'))
+const AcceptInvite  = lazy(() => import('@/pages/AcceptInvitePage'))
+const PrivacyPolicy = lazy(() => import('@/pages/PrivacyPolicyPage'))
+const Terms         = lazy(() => import('@/pages/TermsPage'))
+const NotFound      = lazy(() => import('@/pages/NotFoundPage'))
 
 const requireAuth = () => {
   if (!useAuthStore.getState().isAuthenticated) {
@@ -28,8 +34,22 @@ const requireAuth = () => {
 
 const requireAdmin = () => {
   requireAuth()
-  const role = useAuthStore.getState().user?.role
-  if (role !== 'admin' && role !== 'org_admin') {
+  if (!isAdmin(useAuthStore.getState().user)) {
+    throw redirect({ to: '/' })
+  }
+}
+
+const requireOwner = () => {
+  requireAuth()
+  if (!isOwner(useAuthStore.getState().user)) {
+    throw redirect({ to: '/' })
+  }
+}
+
+const requireManager = () => {
+  requireAuth()
+  const user = useAuthStore.getState().user
+  if (!isAdmin(user) && !isManager(user)) {
     throw redirect({ to: '/' })
   }
 }
@@ -85,6 +105,13 @@ export const adminRoute = createRoute({
   component:      Admin,
 })
 
+export const teamRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path:           '/team',
+  beforeLoad:     requireManager,
+  component:      TeamPage,
+})
+
 export const workspaceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/workspace',
@@ -102,6 +129,19 @@ export const settingsRoute = createRoute({
   component:      Settings,
 })
 
+export const registerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path:           '/register',
+  component:      Register,
+})
+
+export const setupRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path:           '/setup',
+  beforeLoad:     requireOwner,
+  component:      Setup,
+})
+
 export const acceptInviteRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/accept-invite',
@@ -109,6 +149,18 @@ export const acceptInviteRoute = createRoute({
   validateSearch: (s: Record<string, unknown>) => ({
     token: typeof s.token === 'string' ? s.token : '',
   }),
+})
+
+export const privacyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path:           '/privacy',
+  component:      PrivacyPolicy,
+})
+
+export const termsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path:           '/terms',
+  component:      Terms,
 })
 
 export const notFoundRoute = createRoute({
@@ -119,14 +171,19 @@ export const notFoundRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
+  registerRoute,
+  setupRoute,
   oauthCallbackRoute,
   acceptInviteRoute,
   homeRoute,
   queryRoute,
   analyticsRoute,
   adminRoute,
+  teamRoute,
   workspaceRoute,
   settingsRoute,
+  privacyRoute,
+  termsRoute,
   notFoundRoute,
 ])
 

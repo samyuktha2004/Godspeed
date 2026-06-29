@@ -1,17 +1,20 @@
 import { useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { env } from '@/config/env'
+import { Tabs, TabPanel } from '@/components/common/Tabs'
 import { SettingsProfile } from './SettingsProfile'
 import { SettingsPreferences } from './SettingsPreferences'
 import { SettingsApiKeys } from './SettingsApiKeys'
+import { SettingsPrivacy } from './SettingsPrivacy'
 
-type SettingsTab = 'profile' | 'preferences' | 'api-keys'
+type SettingsTab = 'profile' | 'preferences' | 'api-keys' | 'privacy'
 
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'profile', label: 'Profile' },
   { id: 'preferences', label: 'Preferences' },
   // API Keys is stub UI — kept behind a feature flag until the backend exists.
   ...(env.enableApiKeysTab ? [{ id: 'api-keys' as SettingsTab, label: 'API Keys' }] : []),
+  { id: 'privacy', label: 'Privacy & Data' },
 ]
 
 export function SettingsDashboard() {
@@ -31,28 +34,15 @@ export function SettingsDashboard() {
       <h1 className="mb-2 text-3xl font-semibold">Settings</h1>
       <p className="mb-6 text-sm text-stone-500">Manage your account and preferences</p>
 
-      {/* Tab Navigation */}
-      <div className="mb-6 flex gap-1 overflow-x-auto border-b border-surface-subtle">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`whitespace-nowrap px-4 py-2 text-sm font-medium transition-colors ${
-              tab === t.id
-                ? 'border-b-2 border-brand text-brand'
-                : 'text-stone-500 hover:text-stone-700 dark:hover:text-stone-300'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <Tabs tabs={TABS} active={tab} onChange={setTab} className="mb-6" />
 
-      {/* Tab Content */}
       <div className="rounded-lg border border-surface-subtle bg-white dark:bg-stone-900">
-        {tab === 'profile' && <SettingsProfile />}
-        {tab === 'preferences' && <SettingsPreferences />}
-        {tab === 'api-keys' && env.enableApiKeysTab && <SettingsApiKeys />}
+        <TabPanel id="profile"     active={tab}><SettingsProfile /></TabPanel>
+        <TabPanel id="preferences" active={tab}><SettingsPreferences /></TabPanel>
+        {env.enableApiKeysTab && (
+          <TabPanel id="api-keys"  active={tab}><SettingsApiKeys /></TabPanel>
+        )}
+        <TabPanel id="privacy"     active={tab}><SettingsPrivacy /></TabPanel>
       </div>
     </div>
   )

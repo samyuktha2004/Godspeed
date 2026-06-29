@@ -8,14 +8,16 @@ import time
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from toolsforgitnotionslack.agent.cache import Cache
-from toolsforgitnotionslack.agent.planner import build_system_prompt
-from toolsforgitnotionslack.tools.github_tools import GITHUB_TOOLS, GITHUB_TOOL_FNS
-from toolsforgitnotionslack.tools.notion_tools import NOTION_TOOLS, NOTION_TOOL_FNS
-from toolsforgitnotionslack.tools.slack_tools import SLACK_TOOLS, SLACK_TOOL_FNS
+from src.auth.deps import get_current_user
+
+from tools.agent.cache import Cache
+from tools.agent.planner import build_system_prompt
+from tools.tools.github_tools import GITHUB_TOOLS, GITHUB_TOOL_FNS
+from tools.tools.notion_tools import NOTION_TOOLS, NOTION_TOOL_FNS
+from tools.tools.slack_tools import SLACK_TOOLS, SLACK_TOOL_FNS
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tools", tags=["tools"])
@@ -163,7 +165,7 @@ async def _run_agent(history: list[dict]) -> tuple[str, list[ToolCall], str]:
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, _user: dict = Depends(get_current_user)):
     if not os.environ.get("GOOGLE_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
         raise HTTPException(status_code=503, detail="No LLM API key configured")
 
@@ -191,7 +193,7 @@ async def chat(req: ChatRequest):
 
 
 @router.delete("/chat", response_model=ClearResponse)
-async def clear_session(session_id: str):
+async def clear_session(session_id: str, _user: dict = Depends(get_current_user)):
     existed = session_id in _sessions
     _sessions.pop(session_id, None)
     _tool_cache.clear()
