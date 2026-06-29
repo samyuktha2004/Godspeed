@@ -16,4 +16,6 @@ export interface User {
   is_new_hire:         boolean
   mentor_id?:          string
   allowed_channel_ids?: string[]
+  // DPDPA consent acknowledgement timestamp (ISO). null/undefined = not yet captured.
+  consent_at?:         string | null
 }

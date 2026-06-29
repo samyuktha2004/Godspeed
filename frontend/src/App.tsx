@@ -7,10 +7,14 @@ import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 import { ErrorBoundary } from '@/components/common/ErrorBoundary'
 import { NavBar } from '@/components/common/NavBar'
 import { Sidebar } from '@/components/common/Sidebar'
+import { ConsentModal } from '@/components/common/ConsentModal'
 import { cn, isOwner } from '@/lib/utils'
 import { env } from '@/config/env'
 
 const SHELL_FREE_ROUTES = new Set(['/login', '/register', '/auth/callback', '/accept-invite', '/setup'])
+
+// Routes where the DPDPA consent popup must not block reading (public / legal / pre-auth).
+const CONSENT_FREE_ROUTES = new Set(['/login', '/register', '/auth/callback', '/privacy', '/terms'])
 
 export default function App() {
   const theme       = useUIStore((s) => s.theme)
@@ -64,6 +68,7 @@ export default function App() {
   }, [navigate])
 
   const shellFree = SHELL_FREE_ROUTES.has(pathname)
+  const needsConsent = !!user && !user.consent_at && !CONSENT_FREE_ROUTES.has(pathname)
 
   return (
     <div className="min-h-screen bg-surface font-sans text-stone-900 dark:bg-stone-950 dark:text-stone-100">
@@ -94,6 +99,7 @@ export default function App() {
       </main>
 
       <ToastStack />
+      {needsConsent && <ConsentModal />}
     </div>
   )
 }

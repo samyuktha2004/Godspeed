@@ -25,7 +25,7 @@ def get_user_by_email(email: str) -> Optional[dict]:
         result = (
             _client()
             .table("users")
-            .select("id, workspace_id, email, name, password_hash, role, is_owner, is_new_hire, is_active")
+            .select("id, workspace_id, email, name, password_hash, role, is_owner, is_new_hire, is_active, dpdpa_consent_at")
             .eq("email", email.lower())
             .eq("is_active", True)
             .limit(1)
@@ -132,7 +132,7 @@ _DEFAULT_WORKSPACE_ID = "00000000-0000-0000-0000-000000000001"
 
 _OAUTH_USER_FIELDS = (
     "id, workspace_id, email, name, password_hash, role, is_owner, "
-    "is_new_hire, is_active, oauth_provider, oauth_sub"
+    "is_new_hire, is_active, oauth_provider, oauth_sub, dpdpa_consent_at"
 )
 
 

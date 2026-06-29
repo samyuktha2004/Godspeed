@@ -14,7 +14,6 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from src.auth.email import send_email
 from src.auth.permissions import permissions_for_role
 from src.config import settings
 from src.utils.logger import get_logger
@@ -138,6 +137,24 @@ async def _del_session(session_id: str) -> None:
         pass
 
 
+def _session_user_obj(db_user: dict, channel_ids: list[str], team_id: str) -> dict:
+    """Canonical session user payload — keep every login path (password, OAuth,
+    invite, register) in sync, including RBAC permissions and DPDPA consent state."""
+    return {
+        "id":                  db_user["id"],
+        "email":               db_user["email"],
+        "name":                db_user["name"],
+        "role":                db_user["role"],
+        "is_owner":            db_user.get("is_owner", False),
+        "team_id":             team_id,
+        "team":                {"id": team_id, "name": team_id.capitalize()},
+        "is_new_hire":         db_user.get("is_new_hire", False),
+        "allowed_channel_ids": channel_ids,
+        "permissions":         permissions_for_role(db_user["role"]),
+        "consent_at":          db_user.get("dpdpa_consent_at"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -170,18 +187,7 @@ async def login(body: LoginRequest, response: Response) -> dict:
             if pw_match:
                 channel_ids = get_allowed_channel_ids(db_user["id"], db_user["role"])
                 team_id = get_user_team_id(db_user["id"]) or "default"
-                user_obj = {
-                    "id":                  db_user["id"],
-                    "email":               db_user["email"],
-                    "name":                db_user["name"],
-                    "role":                db_user["role"],
-                    "is_owner":            db_user.get("is_owner", False),
-                    "team_id":             team_id,
-                    "team":                {"id": team_id, "name": team_id.capitalize()},
-                    "is_new_hire":         db_user.get("is_new_hire", False),
-                    "allowed_channel_ids": channel_ids,
-                    "permissions":         permissions_for_role(db_user["role"]),
-                }
+                user_obj = _session_user_obj(db_user, channel_ids, team_id)
                 logger.info("auth_login_db", extra={"email": email, "role": db_user["role"]})
     except Exception:
         logger.warning("auth_db_unavailable — falling back to hardcoded credentials")
@@ -208,6 +214,112 @@ async def login(body: LoginRequest, response: Response) -> dict:
         raise HTTPException(status_code=503, detail="Session store unavailable — try again shortly")
 
     response.set_cookie(key=COOKIE_NAME, value=session_id, **_make_cookie_kwargs())
+    return {"user": user_obj}
+
+
+class RegisterRequest(BaseModel):
+    company_name: str
+    name:         str
+    email:        str
+    password:     str
+
+
+@router.post("/register")
+async def register(body: RegisterRequest, response: Response) -> dict:
+    """Bootstrap the first workspace owner (admin + is_owner).
+
+    Single-workspace deploy: this creates the founding admin/owner in the default
+    workspace and names the workspace after the company. Once an owner exists,
+    further self-registration is rejected — additional users join via invite.
+    """
+    from src.auth.db import _DEFAULT_WORKSPACE_ID, get_allowed_channel_ids, get_user_by_email, record_audit
+
+    email = body.email.lower().strip()
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if len(body.company_name.strip()) < 2 or len(body.name.strip()) < 2:
+        raise HTTPException(status_code=400, detail="Company name and your name are required")
+
+    try:
+        from src.auth.db import _client as _db_client
+        sb = _db_client()
+    except Exception:
+        logger.exception("register: Supabase unavailable")
+        raise HTTPException(status_code=503, detail="Registration is temporarily unavailable")
+
+    # Guard: a workspace may bootstrap only one founding owner via self-registration.
+    try:
+        owner_check = (
+            sb.table("users")
+            .select("id", count="exact")
+            .eq("workspace_id", _DEFAULT_WORKSPACE_ID)
+            .eq("is_owner", True)
+            .eq("is_active", True)
+            .execute()
+        )
+    except Exception:
+        logger.exception("register: owner-existence check failed")
+        raise HTTPException(status_code=503, detail="Registration is temporarily unavailable")
+    if (owner_check.count or 0) >= 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Workspace already initialized — sign in or request an invite.",
+        )
+
+    if get_user_by_email(email):
+        raise HTTPException(status_code=409, detail=f"User {email} already exists")
+
+    import bcrypt
+    password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt()).decode()
+
+    try:
+        insert_result = (
+            sb.table("users")
+            .insert({
+                "workspace_id":  _DEFAULT_WORKSPACE_ID,
+                "email":         email,
+                "name":          body.name.strip(),
+                "password_hash": password_hash,
+                "role":          "admin",
+                "is_owner":      True,
+                "is_new_hire":   False,
+                "is_active":     True,
+            })
+            .execute()
+        )
+        db_user = insert_result.data[0] if insert_result.data else None
+        if not db_user:
+            raise RuntimeError("insert returned no data")
+    except Exception:
+        logger.exception("register: owner insert failed for %s", email)
+        raise HTTPException(status_code=500, detail="Failed to create workspace owner")
+
+    # Name the workspace after the company, and place the owner on the default team.
+    try:
+        sb.table("workspaces").update({"name": body.company_name.strip()}).eq("id", _DEFAULT_WORKSPACE_ID).execute()
+    except Exception:
+        logger.warning("register: could not set workspace name for %s", email)
+    try:
+        sb.table("user_teams").insert({"user_id": db_user["id"], "team_id": "default"}).execute()
+    except Exception:
+        logger.warning("register: could not add owner to default team for %s", email)
+
+    channel_ids = get_allowed_channel_ids(db_user["id"], db_user["role"])
+    user_obj = _session_user_obj(db_user, channel_ids, "default")
+
+    session_id = str(uuid4())
+    stored = await _set_session(
+        session_id,
+        {"user": user_obj, "created_at": datetime.utcnow().isoformat()},
+    )
+    if not stored:
+        raise HTTPException(status_code=503, detail="Session store unavailable — try again shortly")
+
+    response.set_cookie(key=COOKIE_NAME, value=session_id, **_make_cookie_kwargs())
+    record_audit(actor_id=db_user["id"], action="workspace_register", target_type="user", target_id=db_user["id"])
+    logger.info("register_success email=%s company=%s", email, body.company_name.strip())
     return {"user": user_obj}
 
 
@@ -350,18 +462,7 @@ async def google_callback(
         channel_ids = get_allowed_channel_ids(db_user["id"], db_user["role"])
         team_id     = get_user_team_id(db_user["id"]) or "default"
 
-        user_obj = {
-            "id":                  db_user["id"],
-            "email":               db_user["email"],
-            "name":                db_user["name"],
-            "role":                db_user["role"],
-            "is_owner":            db_user.get("is_owner", False),
-            "team_id":             team_id,
-            "team":                {"id": team_id, "name": team_id.capitalize()},
-            "is_new_hire":         db_user.get("is_new_hire", False),
-            "allowed_channel_ids": channel_ids,
-            "permissions":         permissions_for_role(db_user["role"]),
-        }
+        user_obj = _session_user_obj(db_user, channel_ids, team_id)
 
     except Exception:
         logger.exception("oauth_user_upsert_failed", extra={"email": profile.get("email")})
@@ -543,17 +644,7 @@ async def accept_invite(body: AcceptInviteRequest, response: Response) -> dict:
     channel_ids = get_allowed_channel_ids(db_user["id"], db_user["role"])
     team_id     = get_user_team_id(db_user["id"]) or "default"
 
-    user_obj = {
-        "id":                  db_user["id"],
-        "email":               db_user["email"],
-        "name":                db_user["name"],
-        "role":                db_user["role"],
-        "is_owner":            db_user.get("is_owner", False),
-        "team_id":             team_id,
-        "team":                {"id": team_id, "name": team_id.capitalize()},
-        "is_new_hire":         db_user.get("is_new_hire", True),
-        "allowed_channel_ids": channel_ids,
-    }
+    user_obj = _session_user_obj(db_user, channel_ids, team_id)
 
     session_id = str(uuid4())
     stored = await _set_session(
@@ -654,4 +745,181 @@ async def change_password(
         logger.exception("auth: change_password failed for %s", user.get("id"))
         raise HTTPException(status_code=500, detail="Failed to change password")
 
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# DPDPA — consent capture and data-subject rights (access / erasure)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_WORKSPACE_ID = "00000000-0000-0000-0000-000000000001"
+
+
+async def _require_session_user(gs_session: str | None) -> dict:
+    """Resolve the authenticated user from the session cookie (no Depends — avoids
+    the deps.py ↔ router.py circular import used by the rest of this module)."""
+    if not gs_session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    session = await _get_session(gs_session)
+    if not session:
+        raise HTTPException(status_code=401, detail="Session expired")
+    return session["user"]
+
+
+@router.post("/me/consent")
+async def record_consent(
+    response: Response,
+    gs_session: str | None = Cookie(default=None),
+) -> dict:
+    """Record the user's DPDPA consent acknowledgement and refresh the session."""
+    user = await _require_session_user(gs_session)
+    now_iso = datetime.utcnow().isoformat()
+    try:
+        from src.auth.db import _client as _db_client
+        _db_client().table("users").update({"dpdpa_consent_at": now_iso}).eq("id", user["id"]).execute()
+    except Exception:
+        logger.exception("consent: failed to persist for %s", user.get("id"))
+        raise HTTPException(status_code=500, detail="Failed to record consent")
+
+    user["consent_at"] = now_iso
+    session = await _get_session(gs_session) or {}
+    session["user"] = user
+    await _set_session(gs_session, session)
+    response.set_cookie(key=COOKIE_NAME, value=gs_session, **_make_cookie_kwargs())
+    return {"user": user}
+
+
+@router.post("/me/data-export")
+async def request_data_export(gs_session: str | None = Cookie(default=None)) -> dict:
+    """DPDPA §11 Right to Access — gather the caller's personal data and email it."""
+    user = await _require_session_user(gs_session)
+    from src.auth.db import get_user_by_email, record_audit
+
+    profile = get_user_by_email(user["email"]) or {k: user.get(k) for k in ("id", "email", "name", "role")}
+    profile.pop("password_hash", None)
+
+    # Gather the caller's own query history + feedback from Redis (bounded slice).
+    history: list[dict] = []
+    feedback: list[dict] = []
+    try:
+        r = await _redis()
+        raw_list = await r.lrange("gs:queries", 0, 9999)
+        for raw in raw_list:
+            try:
+                ev = json.loads(raw)
+            except Exception:
+                continue
+            if ev.get("user_id") == user["id"]:
+                history.append(ev)
+                qid = ev.get("id")
+                if qid:
+                    fb = await r.get(f"gs:feedback:{qid}")
+                    if fb:
+                        try:
+                            feedback.append({"query_id": qid, **json.loads(fb)})
+                        except Exception:
+                            pass
+    except Exception:
+        logger.warning("data_export: history gather failed for %s", user["id"])
+
+    export = {
+        "exported_at": datetime.utcnow().isoformat(),
+        "profile":     profile,
+        "query_history": history,
+        "feedback":      feedback,
+    }
+    payload = json.dumps(export, indent=2, default=str)
+
+    from src.auth.email import send_email_sync
+    html = (
+        f"<p>Hi {user.get('name', '')},</p>"
+        f"<p>As requested, here is a copy of the personal data Godspeed holds about you "
+        f"(DPDPA §11 Right to Access).</p>"
+        f"<pre style=\"white-space:pre-wrap;font-size:12px\">{payload}</pre>"
+    )
+    email_sent = send_email_sync(to=user["email"], subject="Your Godspeed data export", html=html)
+
+    record_audit(
+        actor_id=user["id"], action="data_export", target_type="user", target_id=user["id"],
+        metadata={"records": len(history), "email_sent": email_sent},
+    )
+    logger.info("data_export email=%s records=%d email_sent=%s", user["email"], len(history), email_sent)
+    return {"ok": True, "email_sent": email_sent}
+
+
+@router.post("/me/delete-request")
+async def request_account_deletion(
+    response: Response,
+    gs_session: str | None = Cookie(default=None),
+) -> dict:
+    """DPDPA §12 Right to Erasure — soft-delete the caller and notify workspace admins."""
+    user = await _require_session_user(gs_session)
+    from src.auth.db import record_audit
+
+    try:
+        from src.auth.db import _client as _db_client
+        sb = _db_client()
+    except Exception:
+        logger.exception("delete_request: Supabase unavailable")
+        raise HTTPException(status_code=503, detail="Deletion is temporarily unavailable")
+
+    # Last-owner guard — an owner must transfer ownership before erasing their account.
+    if user.get("is_owner"):
+        try:
+            owner_count = (
+                sb.table("users")
+                .select("id", count="exact")
+                .eq("workspace_id", _DEFAULT_WORKSPACE_ID)
+                .eq("is_owner", True)
+                .eq("is_active", True)
+                .execute()
+            )
+        except Exception:
+            logger.exception("delete_request: owner-count check failed")
+            raise HTTPException(status_code=503, detail="Could not verify owner count — try again")
+        if (owner_count.count or 0) <= 1:
+            raise HTTPException(
+                status_code=409,
+                detail="Transfer ownership to another admin before deleting your account.",
+            )
+
+    # Soft-delete: revoke access immediately; retention purge happens later.
+    try:
+        sb.table("users").update({"is_active": False}).eq("id", user["id"]).execute()
+    except Exception:
+        logger.exception("delete_request: soft-delete failed for %s", user["id"])
+        raise HTTPException(status_code=500, detail="Failed to process deletion request")
+
+    # Notify active workspace admins/owners.
+    try:
+        admins = (
+            sb.table("users")
+            .select("email, name")
+            .eq("workspace_id", _DEFAULT_WORKSPACE_ID)
+            .eq("role", "admin")
+            .eq("is_active", True)
+            .execute()
+        )
+        from src.auth.email import send_email_sync
+        html = (
+            f"<p>{user.get('name', '')} ({user['email']}) has requested erasure of their account "
+            f"under DPDPA §12.</p>"
+            f"<p>Their access has been revoked. Please complete any required data purge within the "
+            f"retention window.</p>"
+        )
+        for admin in (admins.data or []):
+            if admin.get("email") and admin["email"] != user["email"]:
+                send_email_sync(to=admin["email"], subject="Account deletion request", html=html)
+    except Exception:
+        logger.warning("delete_request: admin notification failed for %s", user["email"])
+
+    record_audit(
+        actor_id=user["id"], action="delete_request", target_type="user", target_id=user["id"],
+    )
+
+    # Invalidate the caller's session and clear the cookie.
+    if gs_session:
+        await _del_session(gs_session)
+    response.delete_cookie(COOKIE_NAME)
+    logger.info("delete_request email=%s", user["email"])
     return {"ok": True}

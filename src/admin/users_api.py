@@ -152,7 +152,9 @@ async def patch_user(
             except HTTPException:
                 raise
             except Exception:
+                # Fail closed — never let a transient DB error bypass the last-owner guard.
                 logger.exception("admin: patch_user owner-count check failed")
+                raise HTTPException(status_code=500, detail="Could not verify owner count — aborting")
 
     # Prevent changing an owner's role to non-admin while they still hold is_owner
     if updates.get("role") and updates["role"] != "admin" and target_is_owner:
@@ -231,7 +233,9 @@ async def delete_user(user_id: str, user=Depends(require_role("admin"))) -> dict
         except HTTPException:
             raise
         except Exception:
+            # Fail closed — never let a transient DB error bypass the last-owner guard.
             logger.exception("admin: delete_user last-owner check failed for %s", user_id)
+            raise HTTPException(status_code=500, detail="Could not verify owner count — aborting")
 
     try:
         result = (

@@ -284,7 +284,7 @@ async def _call_gemini_with_system(system_prompt: str, user_message: str) -> str
         try:
             response = await llm.ainvoke(messages)
             return response.content
-        except Exception as exc:
+        except Exception:
             if attempt == 2:
                 raise
             await asyncio.sleep(2 ** attempt)

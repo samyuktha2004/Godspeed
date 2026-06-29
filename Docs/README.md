@@ -14,6 +14,7 @@
 | [`04_integrations_and_tech_stack.md`](./04_integrations_and_tech_stack.md) | Notion, Confluence, GitHub integration specs with full code; RBAC enforcement; change detection; tech stack; local dev setup; env vars | Building any integration or setting up development environment |
 | [`05_market_strategy_and_gtm.md`](./05_market_strategy_and_gtm.md) | Target customer, tool strategy, competitor analysis, USPs, country-by-country market analysis, GTM sequencing | Product, positioning, or expansion decisions |
 | [`anomaly-and-forecasting/`](./anomaly-and-forecasting/README.md) | **Area 4 implementation docs** — data layer, detection algorithms, API reference, Celery scheduling | Building or extending anomaly detection, forecasting, or the Anomalies frontend tab |
+| [`metadata-scaling-up/`](./metadata-scaling-up/README.md) | **Scaling implementation docs** — deterministic query router + knowledge manifest, RBAC channel isolation fix + backfill, BM25-flag/Qdrant retrieval scaling | Working on retrieval routing, channel-level RBAC, or ingest/query scaling |
 
 ---
 

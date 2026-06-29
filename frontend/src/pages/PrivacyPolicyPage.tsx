@@ -87,15 +87,19 @@ export default function PrivacyPolicyPage() {
             We do not sell your personal data. We share it only as described below:
           </p>
           <ul className="list-disc space-y-1.5 pl-5">
-            <li><strong>Cloud infrastructure:</strong> [Cloud provider, e.g. AWS / GCP] hosts our servers. Data may be processed in regions outside India; we rely on Standard Contractual Clauses or equivalent safeguards.</li>
-            <li><strong>AI/LLM providers:</strong> query content may be sent to [provider, e.g. Anthropic API] solely to generate responses. Queries are not used to train third-party models.</li>
-            <li><strong>Email delivery:</strong> [e.g. Resend / SendGrid] for transactional emails.</li>
-            <li><strong>Analytics:</strong> [e.g. PostHog, self-hosted] for anonymised product analytics.</li>
-            <li><strong>Legal & safety:</strong> if required by a court order, government authority, or to protect rights and safety.</li>
+            <li><strong>Anthropic (Claude API):</strong> your query text is sent to generate answers. Queries are not used to train third-party models.</li>
+            <li><strong>Supabase (PostgreSQL, Auth &amp; Storage):</strong> stores user accounts, workspace and document metadata, and ingestion job records.</li>
+            <li><strong>Neo4j:</strong> stores the knowledge graph (entities and relationships extracted from your ingested documents).</li>
+            <li><strong>Qdrant:</strong> stores vector embeddings of document chunks to power semantic search.</li>
+            <li><strong>Redis:</strong> stores session tokens, recent query history, and transient cache.</li>
+            <li><strong>Hosting:</strong> the application runs on Hugging Face Spaces (or your deployment's cloud host). Data may be processed in regions outside India; we rely on Standard Contractual Clauses or equivalent safeguards.</li>
+            <li><strong>Email delivery:</strong> transactional emails (invites, data exports, notifications) are sent via the operator-configured SMTP provider.</li>
+            <li><strong>Legal &amp; safety:</strong> if required by a court order, government authority, or to protect rights and safety.</li>
           </ul>
           <p className="mt-2 text-xs text-stone-500">
-            All sub-processors are contractually bound to process data only on our instructions and to implement
-            reasonable security measures.
+            Document embedding (BGE-M3) and entity extraction (GLiNER) run locally within our own
+            infrastructure and are not shared with any third party. All sub-processors are contractually
+            bound to process data only on our instructions and to implement reasonable security measures.
           </p>
         </section>
 

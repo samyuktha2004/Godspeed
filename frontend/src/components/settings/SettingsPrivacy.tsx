@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { apiFetch } from '@/lib/http'
 import { useUIStore } from '@/stores/uiStore'
+import { useAuthStore } from '@/stores/authStore'
 
 export function SettingsPrivacy() {
   const addToast = useUIStore((s) => s.addToast)
+  const logout   = useAuthStore((s) => s.logout)
   const [exportRequested, setExportRequested] = useState(false)
   const [deleteRequested, setDeleteRequested] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -27,7 +29,12 @@ export function SettingsPrivacy() {
     try {
       await apiFetch('/api/auth/me/delete-request', { method: 'POST' })
       setDeleteRequested(true)
-      addToast({ type: 'success', message: 'Account deletion requested. Your workspace admin will be notified.' })
+      addToast({ type: 'success', message: 'Account deletion requested. Your access has been revoked and your workspace admin notified.' })
+      // The backend has invalidated the session — log out client-side and return to login.
+      setTimeout(() => {
+        logout()
+        window.location.href = '/login'
+      }, 1500)
     } catch {
       addToast({ type: 'error', message: 'Could not submit deletion request. Please try again.' })
     } finally {
