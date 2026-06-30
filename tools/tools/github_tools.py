@@ -4,7 +4,10 @@ GitHub tools — discovery-first, markdown-only reads, paginated, rate-limit awa
 import os
 import httpx
 
+from src.utils.logger import get_logger
+
 GH = "https://api.github.com"
+logger = get_logger(__name__)
 
 
 def _headers() -> dict:
@@ -40,9 +43,14 @@ async def github_list_repos(org_or_user: str = "", repo_type: str = "all",
                                 headers=_headers(), params=params)
         else:
             r = await h.get(f"{GH}/user/repos", headers=_headers(), params=params)
-    if w := _rate_warn(r): return w
-    if r.status_code != 200: return f"GitHub error {r.status_code}: {r.text[:300]}"
+    if w := _rate_warn(r):
+        logger.warning("github_rate_limited", extra={"tool": "github_list_repos"})
+        return w
+    if r.status_code != 200:
+        logger.warning("github_api_error", extra={"tool": "github_list_repos", "status_code": r.status_code})
+        return f"GitHub error {r.status_code}: {r.text[:300]}"
     repos = r.json()
+    logger.info("github_list_repos_done", extra={"count": len(repos), "page": page})
     if not repos: return "No repositories found."
     lines = [
         f"• {repo['full_name']}  {'🔒' if repo['private'] else '🌐'}  "
@@ -59,9 +67,15 @@ async def github_repo_summary(repo: str = "") -> str:
     if not t: return "Provide repo as 'owner/repo' or set GITHUB_REPO."
     async with httpx.AsyncClient(timeout=15) as h:
         r = await h.get(f"{GH}/repos/{t}", headers=_headers())
-    if w := _rate_warn(r): return w
-    if r.status_code == 404: return f"Repo not found: {t}"
-    if r.status_code != 200: return f"GitHub error {r.status_code}"
+    if w := _rate_warn(r):
+        logger.warning("github_rate_limited", extra={"tool": "github_repo_summary"})
+        return w
+    if r.status_code == 404:
+        logger.warning("github_repo_not_found", extra={"repo": t})
+        return f"Repo not found: {t}"
+    if r.status_code != 200:
+        logger.warning("github_api_error", extra={"tool": "github_repo_summary", "status_code": r.status_code})
+        return f"GitHub error {r.status_code}"
     d = r.json()
     topics = ", ".join(d.get("topics", [])) or "none"
     return (
@@ -82,9 +96,15 @@ async def github_list_files(repo: str = "", path: str = "", branch: str = "") ->
     async with httpx.AsyncClient(timeout=15) as h:
         r = await h.get(f"{GH}/repos/{t}/contents/{path}",
                         headers=_headers(), params=params)
-    if w := _rate_warn(r): return w
-    if r.status_code == 404: return f"Path '{path}' not found in {t}."
-    if r.status_code != 200: return f"GitHub error {r.status_code}"
+    if w := _rate_warn(r):
+        logger.warning("github_rate_limited", extra={"tool": "github_list_files"})
+        return w
+    if r.status_code == 404:
+        logger.warning("github_path_not_found", extra={"repo": t, "path": path})
+        return f"Path '{path}' not found in {t}."
+    if r.status_code != 200:
+        logger.warning("github_api_error", extra={"tool": "github_list_files", "status_code": r.status_code})
+        return f"GitHub error {r.status_code}"
     items = r.json()
     if isinstance(items, dict):
         return f"'{path}' is a file. Use github_read_file to read it."
@@ -121,9 +141,15 @@ async def github_read_file(path: str, repo: str = "", branch: str = "") -> str:
             headers={**_headers(), "Accept": "application/vnd.github.raw+json"},
             params=params,
         )
-    if w := _rate_warn(r): return w
-    if r.status_code == 404: return f"File not found: {path} in {t}"
-    if r.status_code != 200: return f"GitHub error {r.status_code}"
+    if w := _rate_warn(r):
+        logger.warning("github_rate_limited", extra={"tool": "github_read_file"})
+        return w
+    if r.status_code == 404:
+        logger.warning("github_file_not_found", extra={"repo": t, "path": path})
+        return f"File not found: {path} in {t}"
+    if r.status_code != 200:
+        logger.warning("github_api_error", extra={"tool": "github_read_file", "status_code": r.status_code})
+        return f"GitHub error {r.status_code}"
     content = r.text
     total   = len(content)
     if total > 8000:
@@ -141,10 +167,18 @@ async def github_search_code(query: str, repo: str = "", language: str = "",
     async with httpx.AsyncClient(timeout=15) as h:
         r = await h.get(f"{GH}/search/code", headers=_headers(),
                         params={"q": q, "per_page": 10})
-    if w := _rate_warn(r): return w
-    if r.status_code == 422: return "Search query too short or invalid."
-    if r.status_code == 403: return "GitHub search rate limit hit. Wait 60s then retry."
-    if r.status_code != 200: return f"GitHub error {r.status_code}: {r.text[:200]}"
+    if w := _rate_warn(r):
+        logger.warning("github_rate_limited", extra={"tool": "github_search_code"})
+        return w
+    if r.status_code == 422:
+        logger.warning("github_search_invalid", extra={"query": query[:120]})
+        return "Search query too short or invalid."
+    if r.status_code == 403:
+        logger.warning("github_search_rate_limited")
+        return "GitHub search rate limit hit. Wait 60s then retry."
+    if r.status_code != 200:
+        logger.warning("github_api_error", extra={"tool": "github_search_code", "status_code": r.status_code})
+        return f"GitHub error {r.status_code}: {r.text[:200]}"
     items = r.json().get("items", [])
     if not items: return "No matching files found."
     return "\n".join(
@@ -161,8 +195,12 @@ async def github_list_markdown_files(repo: str = "", folder: str = "") -> str:
     async with httpx.AsyncClient(timeout=15) as h:
         r = await h.get(f"{GH}/search/code", headers=_headers(),
                         params={"q": q, "per_page": 30})
-    if w := _rate_warn(r): return w
-    if r.status_code != 200: return f"GitHub error {r.status_code}"
+    if w := _rate_warn(r):
+        logger.warning("github_rate_limited", extra={"tool": "github_list_markdown_files"})
+        return w
+    if r.status_code != 200:
+        logger.warning("github_api_error", extra={"tool": "github_list_markdown_files", "status_code": r.status_code})
+        return f"GitHub error {r.status_code}"
     items = r.json().get("items", [])
     if not items: return "No markdown files found."
     return f"[{t}] {len(items)} markdown file(s):\n" + "\n".join(f"• {i['path']}" for i in items)
@@ -176,9 +214,15 @@ async def github_list_commits(repo: str = "", branch: str = "", page: int = 1) -
         params["sha"] = branch
     async with httpx.AsyncClient(timeout=15) as h:
         r = await h.get(f"{GH}/repos/{t}/commits", headers=_headers(), params=params)
-    if w := _rate_warn(r): return w
-    if r.status_code == 404: return f"Repo not found: {t}"
-    if r.status_code != 200: return f"GitHub error {r.status_code}: {r.text[:200]}"
+    if w := _rate_warn(r):
+        logger.warning("github_rate_limited", extra={"tool": "github_list_commits"})
+        return w
+    if r.status_code == 404:
+        logger.warning("github_repo_not_found", extra={"repo": t})
+        return f"Repo not found: {t}"
+    if r.status_code != 200:
+        logger.warning("github_api_error", extra={"tool": "github_list_commits", "status_code": r.status_code})
+        return f"GitHub error {r.status_code}: {r.text[:200]}"
     commits = r.json()
     if not commits: return "No commits found."
     lines = []

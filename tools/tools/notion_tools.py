@@ -3,6 +3,10 @@ Notion tools — search, read pages, list and query databases.
 """
 import os
 import httpx
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 def _notion_headers() -> dict:
     return {
         "Authorization":  f"Bearer {os.environ.get('NOTION_API_TOKEN', '')}",
@@ -22,8 +26,11 @@ async def notion_search(query: str, filter_type: str = "") -> str:
     async with httpx.AsyncClient(timeout=15) as h:
         r = await h.post("https://api.notion.com/v1/search",
                          headers=_notion_headers(), json=body)
-    if r.status_code != 200: return f"Notion error {r.status_code}: {r.text[:300]}"
+    if r.status_code != 200:
+        logger.warning("notion_api_error", extra={"tool": "notion_search", "status_code": r.status_code})
+        return f"Notion error {r.status_code}: {r.text[:300]}"
     results = r.json().get("results", [])
+    logger.info("notion_search_done", extra={"count": len(results), "filter_type": filter_type or "all"})
     if not results: return "No Notion pages or databases found."
     out = []
     for item in results:
@@ -49,8 +56,11 @@ async def notion_read_page(page_id: str, max_blocks: int = 80) -> str:
             headers=_notion_headers(),
             params={"page_size": max_blocks},
         )
-    if r.status_code != 200: return f"Notion error {r.status_code}: {r.text[:300]}"
+    if r.status_code != 200:
+        logger.warning("notion_api_error", extra={"tool": "notion_read_page", "status_code": r.status_code})
+        return f"Notion error {r.status_code}: {r.text[:300]}"
     blocks = r.json().get("results", [])
+    logger.info("notion_read_page_done", extra={"page_id": page_id, "blocks": len(blocks)})
     PREFIXES = {
         "heading_1":           "# ",
         "heading_2":           "## ",
@@ -89,8 +99,11 @@ async def notion_list_databases(query: str = "") -> str:
     async with httpx.AsyncClient(timeout=15) as h:
         r = await h.post("https://api.notion.com/v1/search",
                          headers=_notion_headers(), json=body)
-    if r.status_code != 200: return f"Notion error {r.status_code}: {r.text[:300]}"
+    if r.status_code != 200:
+        logger.warning("notion_api_error", extra={"tool": "notion_list_databases", "status_code": r.status_code})
+        return f"Notion error {r.status_code}: {r.text[:300]}"
     results = r.json().get("results", [])
+    logger.info("notion_list_databases_done", extra={"count": len(results), "query": bool(query)})
     if not results: return "No databases found."
     return "\n".join(
         f"• {_extract_rich_text(db.get('title', [])) or 'Untitled'}  id:{db['id']}"
@@ -111,8 +124,11 @@ async def notion_query_database(database_id: str, filter_property: str = "",
             f"https://api.notion.com/v1/databases/{database_id}/query",
             headers=_notion_headers(), json=body,
         )
-    if r.status_code != 200: return f"Notion error {r.status_code}: {r.text[:300]}"
+    if r.status_code != 200:
+        logger.warning("notion_api_error", extra={"tool": "notion_query_database", "status_code": r.status_code})
+        return f"Notion error {r.status_code}: {r.text[:300]}"
     results = r.json().get("results", [])
+    logger.info("notion_query_database_done", extra={"database_id": database_id, "count": len(results)})
     if not results: return "No results found."
     rows = []
     for page in results:

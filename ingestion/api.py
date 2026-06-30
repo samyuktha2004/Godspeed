@@ -33,6 +33,10 @@ def _dispatch(payload: IngestSourcePayload) -> IngestJobResponse:
 
     task = run_ingest.delay(payload.model_dump())
     job_id = task.id
+    logger.info(
+        "ingest_dispatch_queued",
+        extra={"job_id": job_id, "source_type": payload.source_type, "team_id": payload.team_id},
+    )
 
     record = IngestJobRecord(
         job_id=job_id,
@@ -52,6 +56,7 @@ def _dispatch(payload: IngestSourcePayload) -> IngestJobResponse:
 
 @router.post("/confluence", response_model=IngestJobResponse)
 async def ingest_confluence(request: ConfluenceIngestRequest, _user: dict = Depends(require_role("admin"))) -> IngestJobResponse:
+    logger.info("ingest_confluence_requested", extra={"team_id": request.team_id, "space_key": request.space_key})
     payload = IngestSourcePayload(
         source_type="confluence",
         team_id=request.team_id,
@@ -63,6 +68,7 @@ async def ingest_confluence(request: ConfluenceIngestRequest, _user: dict = Depe
 
 @router.post("/github", response_model=IngestJobResponse)
 async def ingest_github(request: GithubIngestRequest, _user: dict = Depends(require_role("admin"))) -> IngestJobResponse:
+    logger.info("ingest_github_requested", extra={"team_id": request.team_id, "repo_url": request.repo_url})
     payload = IngestSourcePayload(
         source_type="github",
         team_id=request.team_id,
@@ -103,6 +109,10 @@ async def ingest_pdf(team_id: str, file: UploadFile, channel_id: Optional[str] =
             "content": base64.b64encode(content).decode(),
         },
     )
+    logger.info(
+        "ingest_pdf_requested",
+        extra={"team_id": team_id, "channel_id": channel_id, "filename": file.filename, "size_bytes": len(content)},
+    )
     return _dispatch(payload)
 
 
@@ -123,6 +133,7 @@ async def get_job_status(job_id: str, user: dict = Depends(get_current_user)) ->
             "FAILURE": IngestJobStatus.failed,
         }
         status = state_map.get(task.state, IngestJobStatus.pending)
+        logger.info("ingest_job_status_from_celery", extra={"job_id": job_id, "status": str(status)})
         return IngestJobResponse(job_id=job_id, status=status)
 
     # Tenant isolation: only the owning team (or admins) can see job status

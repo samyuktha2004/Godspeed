@@ -29,6 +29,9 @@ import redis.asyncio as aioredis
 from qdrant_client import AsyncQdrantClient
 
 from src.config import settings
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 _redis: Optional[aioredis.Redis] = None
 _qdrant: Optional[AsyncQdrantClient] = None
@@ -38,6 +41,7 @@ _qdrant_lock = asyncio.Lock()
 
 
 def _build_redis() -> aioredis.Redis:
+    logger.info("redis_client_build")
     return aioredis.from_url(
         settings.redis_url,
         decode_responses=True,
@@ -49,10 +53,12 @@ def _build_redis() -> aioredis.Redis:
 
 def _build_qdrant() -> AsyncQdrantClient:
     if settings.qdrant_url:
+        logger.info("qdrant_client_build", extra={"mode": "url"})
         return AsyncQdrantClient(
             url=settings.qdrant_url,
             api_key=settings.qdrant_api_key or None,
         )
+    logger.info("qdrant_client_build", extra={"mode": "host_port"})
     return AsyncQdrantClient(
         host=settings.qdrant_host,
         port=settings.qdrant_port,
@@ -66,6 +72,7 @@ async def init_clients() -> None:
         _redis = _build_redis()
     if _qdrant is None:
         _qdrant = _build_qdrant()
+    logger.info("shared_clients_initialized")
 
 
 async def close_clients() -> None:
@@ -75,14 +82,15 @@ async def close_clients() -> None:
         try:
             await _redis.aclose()
         except Exception:
-            pass
+            logger.exception("redis_client_close_failed")
         _redis = None
     if _qdrant is not None:
         try:
             await _qdrant.close()
         except Exception:
-            pass
+            logger.exception("qdrant_client_close_failed")
         _qdrant = None
+    logger.info("shared_clients_closed")
 
 
 async def get_redis() -> aioredis.Redis:
@@ -91,6 +99,7 @@ async def get_redis() -> aioredis.Redis:
     if _redis is None:
         async with _redis_lock:
             if _redis is None:
+                logger.info("redis_client_lazy_init")
                 _redis = _build_redis()
     return _redis
 
@@ -102,5 +111,6 @@ def get_qdrant() -> AsyncQdrantClient:
         # No asyncio.Lock needed: AsyncQdrantClient construction is sync and
         # cheap. Worst case two callers race and one wins — the loser's
         # client is discarded with no IO performed.
+        logger.info("qdrant_client_lazy_init")
         _qdrant = _build_qdrant()
     return _qdrant

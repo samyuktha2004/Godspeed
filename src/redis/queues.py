@@ -8,6 +8,10 @@ from enum import Enum
 import redis
 from pydantic import BaseModel
 
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class Priority(str, Enum):
     """Task priority levels."""
@@ -77,6 +81,11 @@ class IngestQueue:
             {json.dumps(task): priority_scores[priority]}
         )
 
+        logger.info(
+            "ingest_queue_task_added",
+            extra={"task_id": task_id, "priority": priority.value, "source_type": source_type},
+        )
+
         return task_id
 
     async def pop(self, batch_size: int = 10) -> list[QueuedTask]:
@@ -110,6 +119,8 @@ class IngestQueue:
             )
             tasks.append(task)
 
+        if tasks:
+            logger.info("ingest_queue_tasks_popped", extra={"count": len(tasks), "key": key})
         return tasks
 
     async def requeue_on_failure(self, task: QueuedTask) -> bool:
@@ -120,6 +131,7 @@ class IngestQueue:
         if task.attempt >= task.max_retries:
             # Send to deadletter queue
             await self.send_to_deadletter(task, "max_retries_exceeded")
+            logger.warning("ingest_queue_max_retries_exceeded", extra={"task_id": task.id})
             return False
 
         task.attempt += 1
@@ -129,6 +141,7 @@ class IngestQueue:
             task.rbac_tags,
             task.priority,
         )
+        logger.warning("ingest_queue_task_requeued", extra={"task_id": task.id, "attempt": task.attempt})
         return True
 
     async def send_to_deadletter(self, task: QueuedTask, reason: str):
@@ -144,6 +157,7 @@ class IngestQueue:
         self.redis.lpush(dlq_key, json.dumps(dlq_item))
         # Keep deadletter for 30 days
         self.redis.expire(dlq_key, 86400 * 30)
+        logger.warning("ingest_queue_deadlettered", extra={"task_id": task.id, "reason": reason})
 
     async def get_stats(self) -> dict:
         """Get queue statistics."""
@@ -197,6 +211,11 @@ class WebhookQueue:
             {json.dumps(event): priority_scores[priority]}
         )
 
+        logger.info(
+            "webhook_queue_event_added",
+            extra={"event_id": event_id, "event_type": event_type, "priority": priority.value},
+        )
+
         return event_id
 
     async def pop(self, batch_size: int = 5) -> list[dict]:
@@ -217,6 +236,8 @@ class WebhookQueue:
 
             events.append(event)
 
+        if events:
+            logger.info("webhook_queue_events_popped", extra={"count": len(events), "key": key})
         return events
 
 

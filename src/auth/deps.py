@@ -5,6 +5,9 @@ from __future__ import annotations
 from fastapi import Cookie, Depends, HTTPException
 
 from src.auth.router import _get_session
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 async def get_current_user(
@@ -17,9 +20,11 @@ async def get_current_user(
         id, email, name, role, team_id, is_new_hire, allowed_channel_ids
     """
     if not gs_session:
+        logger.warning("auth_missing_cookie")
         raise HTTPException(status_code=401, detail="Not authenticated")
     session = await _get_session(gs_session)
     if not session:
+        logger.warning("auth_session_expired")
         raise HTTPException(status_code=401, detail="Session expired")
     return session["user"]
 
@@ -35,6 +40,10 @@ def require_role(*roles: str):
     """
     async def _check(user: dict = Depends(get_current_user)) -> dict:
         if user.get("role") not in roles:
+            logger.warning(
+                "auth_role_denied",
+                extra={"required_roles": list(roles), "actual_role": user.get("role"), "user_id": user.get("id")},
+            )
             raise HTTPException(
                 status_code=403,
                 detail=f"Role '{user.get('role')}' cannot access this endpoint",
@@ -55,6 +64,10 @@ def require_permission(perm: str):
     """
     async def _check(user: dict = Depends(get_current_user)) -> dict:
         if perm not in user.get("permissions", []):
+            logger.warning(
+                "auth_permission_denied",
+                extra={"permission": perm, "user_id": user.get("id")},
+            )
             raise HTTPException(
                 status_code=403,
                 detail=f"Missing permission: {perm}",
@@ -74,6 +87,7 @@ def require_owner():
     """
     async def _check(user: dict = Depends(get_current_user)) -> dict:
         if not user.get("is_owner"):
+            logger.warning("auth_owner_required", extra={"user_id": user.get("id")})
             raise HTTPException(
                 status_code=403,
                 detail="Only the workspace owner can perform this action",

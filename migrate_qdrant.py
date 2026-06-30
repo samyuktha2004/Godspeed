@@ -1,12 +1,18 @@
 """Migrate local Qdrant collection to Qdrant Cloud. Run once before deploying."""
-import asyncio, os, sys
+import asyncio
+import logging
+import os
+import sys
 
 COLLECTION = "knowledge_base"
 CLOUD_URL = os.getenv("QDRANT_CLOUD_URL", "")
 CLOUD_KEY = os.getenv("QDRANT_CLOUD_API_KEY", "")
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
 if not CLOUD_URL or not CLOUD_KEY:
-    print("Set QDRANT_CLOUD_URL and QDRANT_CLOUD_API_KEY env vars first")
+    logger.error("Set QDRANT_CLOUD_URL and QDRANT_CLOUD_API_KEY env vars first")
     sys.exit(1)
 
 async def migrate():
@@ -17,7 +23,7 @@ async def migrate():
     dst = AsyncQdrantClient(url=CLOUD_URL, api_key=CLOUD_KEY)
 
     info = await src.get_collection(COLLECTION)
-    print(f"Source collection: {info.points_count} points")
+    logger.info("Source collection has %s points", info.points_count)
 
     try:
         await dst.delete_collection(COLLECTION)
@@ -30,7 +36,7 @@ async def migrate():
         vectors_config=info.config.params.vectors,
         sparse_vectors_config=info.config.params.sparse_vectors,
     )
-    print("Created cloud collection (dense + sparse)")
+    logger.info("Created cloud collection with dense and sparse vectors")
 
     offset = None
     total = 0
@@ -49,10 +55,10 @@ async def migrate():
         if structs:
             await dst.upsert(COLLECTION, points=structs)
         total += len(structs)
-        print(f"Migrated {total} points...")
+        logger.info("Migrated %s points", total)
         if offset is None:
             break
 
-    print(f"Done — {total} points migrated to {CLOUD_URL}")
+    logger.info("Done: %s points migrated to %s", total, CLOUD_URL)
 
 asyncio.run(migrate())

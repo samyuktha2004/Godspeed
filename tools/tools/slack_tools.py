@@ -4,6 +4,10 @@ Slack tools — search, history, threads, channel metadata.
 import os
 import httpx
 
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 def _headers() -> dict:
     return {"Authorization": f"Bearer {os.environ.get('SLACK_BOT_TOKEN', '')}"}
 
@@ -17,10 +21,13 @@ async def slack_list_channels(filter_name: str = "") -> str:
                     "limit": 200, "exclude_archived": True},
         )
     d = r.json()
-    if not d.get("ok"): return f"Slack error: {d.get('error')}"
+    if not d.get("ok"):
+        logger.warning("slack_api_error", extra={"tool": "slack_list_channels", "error": d.get("error")})
+        return f"Slack error: {d.get('error')}"
     channels = d.get("channels", [])
     if filter_name:
         channels = [c for c in channels if filter_name.lower() in c["name"].lower()]
+    logger.info("slack_list_channels_done", extra={"count": len(channels), "filtered": bool(filter_name)})
     if not channels: return "No channels found."
     return "\n".join(
         f"• #{c['name']}  id:{c['id']}  members:{c.get('num_members',0)}"
@@ -43,8 +50,11 @@ async def slack_search(query: str, channel: str = "",
             params={"query": q, "count": min(count, 20), "highlight": False},
         )
     d = r.json()
-    if not d.get("ok"): return f"Slack error: {d.get('error')}"
+    if not d.get("ok"):
+        logger.warning("slack_api_error", extra={"tool": "slack_search", "error": d.get("error")})
+        return f"Slack error: {d.get('error')}"
     matches = d.get("messages", {}).get("matches", [])
+    logger.info("slack_search_done", extra={"matches": len(matches), "channel": channel})
     if not matches: return "No messages found."
     parts = []
     for m in matches:
@@ -66,8 +76,11 @@ async def slack_channel_history(channel_id: str, limit: int = 20,
         r = await h.get("https://slack.com/api/conversations.history",
                         headers=_headers(), params=params)
     d = r.json()
-    if not d.get("ok"): return f"Slack error: {d.get('error')}"
+    if not d.get("ok"):
+        logger.warning("slack_api_error", extra={"tool": "slack_channel_history", "error": d.get("error")})
+        return f"Slack error: {d.get('error')}"
     messages = d.get("messages", [])
+    logger.info("slack_channel_history_done", extra={"channel_id": channel_id, "count": len(messages)})
     if not messages: return "No messages in range."
     lines = []
     for m in reversed(messages):
@@ -84,8 +97,11 @@ async def slack_get_thread(channel_id: str, thread_ts: str, limit: int = 30) -> 
             params={"channel": channel_id, "ts": thread_ts, "limit": min(limit, 50)},
         )
     d = r.json()
-    if not d.get("ok"): return f"Slack error: {d.get('error')}"
+    if not d.get("ok"):
+        logger.warning("slack_api_error", extra={"tool": "slack_get_thread", "error": d.get("error")})
+        return f"Slack error: {d.get('error')}"
     messages = d.get("messages", [])
+    logger.info("slack_get_thread_done", extra={"channel_id": channel_id, "count": len(messages)})
     if not messages: return "Thread not found or empty."
     return "\n".join(
         f"[{m.get('ts','')}] {m.get('username', m.get('user','?'))}: {m.get('text','')[:400]}"

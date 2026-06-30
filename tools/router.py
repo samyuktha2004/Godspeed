@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import time
 import uuid
@@ -12,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.auth.deps import get_current_user
+from src.utils.logger import get_logger
 
 from tools.agent.cache import Cache
 from tools.agent.planner import build_system_prompt
@@ -19,7 +19,7 @@ from tools.tools.github_tools import GITHUB_TOOLS, GITHUB_TOOL_FNS
 from tools.tools.notion_tools import NOTION_TOOLS, NOTION_TOOL_FNS
 from tools.tools.slack_tools import SLACK_TOOLS, SLACK_TOOL_FNS
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 router = APIRouter(prefix="/tools", tags=["tools"])
 
 GEMINI_MODEL = "gemini-2.5-flash"
@@ -59,13 +59,18 @@ class ClearResponse(BaseModel):
 
 
 async def _dispatch(name: str, args: dict) -> tuple[str, bool]:
+    logger.info("tools_dispatch_start", extra={"tool": name})
     key = f"{name}:{json.dumps(args, sort_keys=True)}"
     cached = _tool_cache.get(key)
     if cached:
+        logger.info("tools_dispatch_cache_hit", extra={"tool": name})
         return cached, True
     fn = ALL_FNS.get(name)
+    if fn is None:
+        logger.warning("tools_dispatch_unknown_tool", extra={"tool": name})
     result = await fn(**args) if fn else f"Unknown tool: {name}"
     _tool_cache.set(key, result)
+    logger.info("tools_dispatch_done", extra={"tool": name, "cached": False})
     return result, False
 
 
@@ -89,11 +94,13 @@ async def _run_agent_gemini(history: list[dict]) -> tuple[str, list[ToolCall]]:
             messages.append(AIMessage(content=msg["content"]))
 
     tool_log: list[ToolCall] = []
+    logger.info("tools_agent_gemini_start", extra={"history_len": len(history)})
 
     for _ in range(14):
         response = await llm_with_tools.ainvoke(messages)
 
         if not response.tool_calls:
+            logger.info("tools_agent_gemini_complete", extra={"tool_calls": len(tool_log)})
             return response.content, tool_log
 
         messages.append(response)
@@ -119,6 +126,7 @@ async def _run_agent_openai(history: list[dict]) -> tuple[str, list[ToolCall]]:
     system = build_system_prompt(GITHUB_REPO)
     messages = [{"role": "system", "content": system}] + history
     tool_log: list[ToolCall] = []
+    logger.info("tools_agent_openai_start", extra={"history_len": len(history)})
 
     for _ in range(14):
         response = await client.chat.completions.create(
@@ -131,6 +139,7 @@ async def _run_agent_openai(history: list[dict]) -> tuple[str, list[ToolCall]]:
         tool_calls = msg.tool_calls or []
 
         if not tool_calls:
+            logger.info("tools_agent_openai_complete", extra={"tool_calls": len(tool_log)})
             return msg.content or "", tool_log
 
         messages.append(msg)
@@ -158,6 +167,7 @@ async def _run_agent(history: list[dict]) -> tuple[str, list[ToolCall], str]:
             logger.exception("tools_agent: Gemini failed, falling back to OpenAI")
 
     if os.environ.get("OPENAI_API_KEY"):
+        logger.info("tools_agent_using_openai_fallback")
         answer, tool_log = await _run_agent_openai(history)
         return answer, tool_log, OPENAI_MODEL
 
@@ -172,16 +182,29 @@ async def chat(req: ChatRequest, _user: dict = Depends(get_current_user)):
     session_id = req.session_id or str(uuid.uuid4())
     history = _sessions.setdefault(session_id, [])
     history.append({"role": "user", "content": req.message})
+    logger.info("tools_chat_received", extra={"session_id": session_id, "history_len": len(history)})
 
     t0 = time.monotonic()
     try:
         answer, tool_log, model_used = await _run_agent(history)
     except Exception as e:
+        logger.exception("tools_chat_failed", extra={"session_id": session_id})
         raise HTTPException(status_code=500, detail=str(e))
 
     history.append({"role": "assistant", "content": answer})
     if len(history) > 60:
         _sessions[session_id] = history[-60:]
+        logger.info("tools_chat_history_trimmed", extra={"session_id": session_id, "history_len": 60})
+
+    logger.info(
+        "tools_chat_completed",
+        extra={
+            "session_id": session_id,
+            "elapsed_seconds": round(time.monotonic() - t0, 2),
+            "tool_calls": len(tool_log),
+            "model_used": model_used,
+        },
+    )
 
     return ChatResponse(
         answer=answer,
@@ -197,11 +220,13 @@ async def clear_session(session_id: str, _user: dict = Depends(get_current_user)
     existed = session_id in _sessions
     _sessions.pop(session_id, None)
     _tool_cache.clear()
+    logger.info("tools_chat_cleared", extra={"session_id": session_id, "existed": existed})
     return ClearResponse(cleared=existed, session_id=session_id)
 
 
 @router.get("/health")
 async def tools_health():
+    logger.info("tools_health_checked", extra={"active_sessions": len(_sessions)})
     return {
         "status": "ok",
         "primary_model": GEMINI_MODEL,

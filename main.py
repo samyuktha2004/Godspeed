@@ -23,20 +23,27 @@ from src.admin.users_api import router as admin_users_router
 from src.admin.users_api import audit_router as admin_audit_router
 from src.workspace.router import router as workspace_router
 from src.ws.router import router as ws_router
+from src.utils.logger import get_logger
 # src.utils.logger configures the root JSON handler on import
+
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from src.utils.clients import close_clients, init_clients
 
+    logger.info("app_startup_begin")
     await init_clients()
+    logger.info("app_startup_ready")
     try:
         yield
     finally:
         from graph_store.writer import close_driver
+        logger.info("app_shutdown_begin")
         await close_clients()
         await close_driver()
+        logger.info("app_shutdown_done")
 
 
 app = FastAPI(
@@ -128,6 +135,9 @@ async def health(response: Response) -> dict:
 
     if results["status"] != "ok":
         response.status_code = 503
+        logger.warning("health_degraded", extra=results)
+    else:
+        logger.info("health_ok", extra=results)
 
     return results
 
@@ -141,6 +151,7 @@ from fastapi.responses import FileResponse as _FileResponse
 
 _dist = _os.path.join(_os.path.dirname(__file__), "frontend", "dist")
 if _os.path.exists(_dist):
+    logger.info("spa_dist_mounted", extra={"dist": _dist})
     app.mount("/assets", StaticFiles(directory=_os.path.join(_dist, "assets")), name="assets")
 
     @app.get("/{full_path:path}", include_in_schema=False)
@@ -149,3 +160,5 @@ if _os.path.exists(_dist):
         if _os.path.isfile(file):
             return _FileResponse(file)
         return _FileResponse(_os.path.join(_dist, "index.html"))
+else:
+    logger.warning("spa_dist_missing", extra={"dist": _dist})
