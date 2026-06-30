@@ -1,11 +1,15 @@
 """Distributed locks to prevent concurrent syncing of same source."""
 
 import asyncio
+import hashlib
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
 import redis
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class DistributedLock:
@@ -23,6 +27,10 @@ class DistributedLock:
     def _make_lock_key(self, resource: str) -> str:
         """Build lock key."""
         return f"{self.key_prefix}:{resource}"
+
+    @staticmethod
+    def _resource_ref(resource: str) -> str:
+        return hashlib.sha256(resource.encode()).hexdigest()[:12]
 
     async def acquire(
         self,
@@ -49,8 +57,12 @@ class DistributedLock:
             nx=True,
             ex=timeout_seconds,
         )
-
-        return result is not None
+        acquired = result is not None
+        logger.info(
+            "distributed_lock_acquire",
+            extra={"resource_ref": self._resource_ref(resource), "acquired": acquired, "timeout_seconds": timeout_seconds},
+        )
+        return acquired
 
     async def release(self, resource: str) -> bool:
         """
@@ -71,13 +83,16 @@ class DistributedLock:
 
         script = self.redis.register_script(lua_script)
         result = script(keys=[lock_key], args=[self.lock_id])
-
-        return result > 0
+        released = result > 0
+        logger.info("distributed_lock_release", extra={"resource_ref": self._resource_ref(resource), "released": released})
+        return released
 
     async def is_locked(self, resource: str) -> bool:
         """Check if resource is currently locked."""
         lock_key = self._make_lock_key(resource)
-        return self.redis.exists(lock_key) > 0
+        locked = self.redis.exists(lock_key) > 0
+        logger.info("distributed_lock_check", extra={"resource_ref": self._resource_ref(resource), "locked": locked})
+        return locked
 
     async def wait_and_acquire(
         self,
@@ -95,11 +110,13 @@ class DistributedLock:
 
         while datetime.utcnow() < wait_deadline:
             if await self.acquire(resource, timeout_seconds):
+                logger.info("distributed_lock_wait_acquired", extra={"resource_ref": self._resource_ref(resource)})
                 return True
 
             # Back off: sleep 100ms before retrying
             await asyncio.sleep(0.1)
 
+        logger.warning("distributed_lock_wait_timeout", extra={"resource_ref": self._resource_ref(resource), "max_wait_seconds": max_wait_seconds})
         return False
 
 
@@ -136,4 +153,5 @@ class LockPool:
         for resource, lock in self.locks.items():
             await lock.release(resource)
 
+        logger.info("distributed_lock_pool_cleared", extra={"count": len(self.locks)})
         self.locks.clear()

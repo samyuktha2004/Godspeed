@@ -5,6 +5,9 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import redis
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class RedisCache:
@@ -47,6 +50,8 @@ class RedisCache:
         else:
             self.redis.set(cache_key, cache_value)
 
+        logger.info("redis_cache_set", extra={"namespace": namespace, "ttl_seconds": ttl_seconds})
+
         return True
 
     async def get(
@@ -67,7 +72,10 @@ class RedisCache:
         value = self.redis.get(cache_key)
 
         if not value:
+            logger.info("redis_cache_miss", extra={"namespace": namespace})
             return None
+
+        logger.info("redis_cache_hit", extra={"namespace": namespace})
 
         value_str = value.decode('utf-8')
 
@@ -75,6 +83,7 @@ class RedisCache:
             try:
                 return json.loads(value_str)
             except (json.JSONDecodeError, ValueError):
+                logger.warning("redis_cache_deserialize_fallback", extra={"namespace": namespace})
                 return value_str
 
         return value_str
@@ -83,19 +92,25 @@ class RedisCache:
         """Delete cache entry."""
         cache_key = self._make_key(namespace, key)
         self.redis.delete(cache_key)
+        logger.info("redis_cache_delete", extra={"namespace": namespace})
         return True
 
     async def exists(self, namespace: str, key: str) -> bool:
         """Check if cache entry exists."""
         cache_key = self._make_key(namespace, key)
-        return self.redis.exists(cache_key) > 0
+        exists = self.redis.exists(cache_key) > 0
+        logger.info("redis_cache_exists", extra={"namespace": namespace, "exists": exists})
+        return exists
 
     async def clear_namespace(self, namespace: str) -> int:
         """Clear all entries in a namespace."""
         pattern = self._make_key(namespace, "*")
         keys = self.redis.keys(pattern)
         if keys:
-            return self.redis.delete(*keys)
+            deleted = self.redis.delete(*keys)
+            logger.info("redis_cache_namespace_cleared", extra={"namespace": namespace, "deleted": deleted})
+            return deleted
+        logger.info("redis_cache_namespace_empty", extra={"namespace": namespace})
         return 0
 
 
@@ -118,6 +133,7 @@ class SyncStateCache(RedisCache):
         """Update last sync timestamp to now."""
         key = f"{source_type}:{space_id}"
         await self.set("last_sync", key, datetime.utcnow().isoformat())
+        logger.info("sync_state_updated", extra={"source_type": source_type})
 
     async def get_last_full_sync(self, source_type: str, space_id: str) -> Optional[datetime]:
         """Get last full (non-incremental) sync timestamp."""
@@ -132,6 +148,7 @@ class SyncStateCache(RedisCache):
         """Update last full sync timestamp to now."""
         key = f"{source_type}:{space_id}"
         await self.set("full_sync", key, datetime.utcnow().isoformat())
+        logger.info("sync_state_full_updated", extra={"source_type": source_type})
 
 
 class CredentialCache(RedisCache):
@@ -157,8 +174,10 @@ class CredentialCache(RedisCache):
         """Cache credentials with short TTL (should fetch fresh when possible)."""
         key = f"{integration_type}:{org_id}"
         await self.set("creds", key, credentials, ttl_seconds=ttl_seconds)
+        logger.info("credential_cache_set", extra={"integration_type": integration_type, "ttl_seconds": ttl_seconds})
 
     async def clear_credentials(self, integration_type: str, org_id: str):
         """Revoke cached credentials immediately."""
         key = f"{integration_type}:{org_id}"
         await self.delete("creds", key)
+        logger.info("credential_cache_cleared", extra={"integration_type": integration_type})

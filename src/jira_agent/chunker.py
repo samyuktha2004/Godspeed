@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 
 from ingestion.models import DocumentChunk, RawDocument
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def chunk_jira_issue(raw_doc: RawDocument) -> list[DocumentChunk]:
@@ -37,10 +40,12 @@ def chunk_jira_issue(raw_doc: RawDocument) -> list[DocumentChunk]:
 
     # Chunks 1..N: comments
     comments = raw_doc.metadata.get("comments", [])
+    skipped_comments = 0
     for idx, comment in enumerate(comments, start=1):
         author = comment.get("author", "Unknown")
         body = comment.get("body", "").strip()
         if not body:
+            skipped_comments += 1
             continue
         text = f"Comment on {key} by {author}:\n{body}"
         chunk_id = hashlib.sha256(f"jira:{key}:{idx}".encode()).hexdigest()
@@ -62,5 +67,16 @@ def chunk_jira_issue(raw_doc: RawDocument) -> list[DocumentChunk]:
                 },
             )
         )
+
+    logger.info(
+        "jira_issue_chunked",
+        extra={
+            "doc_id": raw_doc.doc_id,
+            "team_id": raw_doc.team_id,
+            "comment_count": len(comments),
+            "skipped_comments": skipped_comments,
+            "chunk_count": len(chunks),
+        },
+    )
 
     return chunks

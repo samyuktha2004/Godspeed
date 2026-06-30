@@ -1,4 +1,10 @@
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
 def build_system_prompt(default_repo: str = "") -> str:
+    logger.info("tools_system_prompt_build", extra={"has_default_repo": bool(default_repo)})
     repo_hint = f"\n  Default GitHub repo: {default_repo}" if default_repo else ""
     return f"""You are an enterprise knowledge assistant with live access to GitHub, Slack, and Notion.{repo_hint}
 

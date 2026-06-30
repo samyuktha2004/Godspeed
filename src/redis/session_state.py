@@ -1,11 +1,19 @@
 """Session state management for API requests, webhook processing, and user interactions."""
 
 import json
+import hashlib
 from datetime import datetime, timedelta
 from typing import Any, Optional
 from uuid import uuid4
 
 import redis
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def _safe_ref(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()[:12]
 
 
 class SessionStateManager:
@@ -43,6 +51,8 @@ class SessionStateManager:
             json.dumps(session_data),
         )
 
+        logger.info("session_created", extra={"session_ref": _safe_ref(session_id), "ttl_seconds": ttl_seconds})
+
         return session_id
 
     async def get_session(self, session_id: str) -> Optional[dict]:
@@ -51,7 +61,10 @@ class SessionStateManager:
         data = self.redis.get(session_key)
 
         if not data:
+            logger.info("session_miss", extra={"session_ref": _safe_ref(session_id)})
             return None
+
+        logger.info("session_hit", extra={"session_ref": _safe_ref(session_id)})
 
         return json.loads(data.decode('utf-8'))
 
@@ -61,6 +74,7 @@ class SessionStateManager:
         session_data = await self.get_session(session_id)
 
         if not session_data:
+            logger.warning("session_update_missing", extra={"session_ref": _safe_ref(session_id)})
             return False
 
         session_data.update(updates)
@@ -72,17 +86,22 @@ class SessionStateManager:
             json.dumps(session_data),
         )
 
+        logger.info("session_updated", extra={"session_ref": _safe_ref(session_id), "ttl_seconds": ttl_seconds})
+
         return True
 
     async def delete_session(self, session_id: str):
         """Invalidate a session."""
         session_key = self._make_session_key(session_id)
         self.redis.delete(session_key)
+        logger.info("session_deleted", extra={"session_ref": _safe_ref(session_id)})
 
     async def session_exists(self, session_id: str) -> bool:
         """Check if session is still valid."""
         session_key = self._make_session_key(session_id)
-        return self.redis.exists(session_key) > 0
+        exists = self.redis.exists(session_key) > 0
+        logger.info("session_exists_checked", extra={"session_ref": _safe_ref(session_id), "exists": exists})
+        return exists
 
 
 class WebhookProcessingState:
@@ -106,6 +125,7 @@ class WebhookProcessingState:
         }
 
         self.redis.setex(key, ttl_seconds, json.dumps(state))
+        logger.info("webhook_state_processing", extra={"webhook_ref": _safe_ref(webhook_id), "ttl_seconds": ttl_seconds})
 
     async def mark_completed(self, webhook_id: str, result: dict):
         """Mark webhook as completed."""
@@ -119,6 +139,7 @@ class WebhookProcessingState:
 
         # Keep for 7 days after completion
         self.redis.setex(key, 86400 * 7, json.dumps(state))
+        logger.info("webhook_state_completed", extra={"webhook_ref": _safe_ref(webhook_id)})
 
     async def mark_failed(self, webhook_id: str, error: str, retry_at: Optional[datetime] = None):
         """Mark webhook as failed."""
@@ -132,6 +153,7 @@ class WebhookProcessingState:
         }
 
         self.redis.setex(key, 86400 * 7, json.dumps(state))
+        logger.warning("webhook_state_failed", extra={"webhook_ref": _safe_ref(webhook_id), "has_retry": retry_at is not None})
 
     async def get_state(self, webhook_id: str) -> Optional[dict]:
         """Get current state of a webhook."""
@@ -139,7 +161,10 @@ class WebhookProcessingState:
         data = self.redis.get(key)
 
         if not data:
+            logger.info("webhook_state_miss", extra={"webhook_ref": _safe_ref(webhook_id)})
             return None
+
+        logger.info("webhook_state_hit", extra={"webhook_ref": _safe_ref(webhook_id)})
 
         return json.loads(data.decode('utf-8'))
 
@@ -184,6 +209,7 @@ class AgentJobTracker:
         }
 
         self.redis.setex(key, ttl_seconds, json.dumps(job))
+        logger.info("agent_job_created", extra={"job_ref": _safe_ref(job_id), "agent_name": agent_name})
 
     async def mark_job_running(self, job_id: str):
         """Mark job as running."""
@@ -194,6 +220,7 @@ class AgentJobTracker:
         job["started_at"] = datetime.utcnow().isoformat()
 
         self.redis.set(key, json.dumps(job))
+        logger.info("agent_job_running", extra={"job_ref": _safe_ref(job_id)})
 
     async def mark_job_completed(self, job_id: str, output: dict):
         """Mark job as completed with output."""
@@ -205,6 +232,7 @@ class AgentJobTracker:
         job["completed_at"] = datetime.utcnow().isoformat()
 
         self.redis.set(key, json.dumps(job))
+        logger.info("agent_job_completed", extra={"job_ref": _safe_ref(job_id)})
 
     async def get_job(self, job_id: str) -> Optional[dict]:
         """Get job status and output."""
@@ -212,7 +240,10 @@ class AgentJobTracker:
         data = self.redis.get(key)
 
         if not data:
+            logger.info("agent_job_miss", extra={"job_ref": _safe_ref(job_id)})
             return None
+
+        logger.info("agent_job_hit", extra={"job_ref": _safe_ref(job_id)})
 
         return json.loads(data.decode('utf-8'))
 
