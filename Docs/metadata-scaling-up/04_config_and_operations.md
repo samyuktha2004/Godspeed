@@ -96,8 +96,4 @@ Plus: `pyflakes` reports **no undefined names / broken references** across all c
 
 ## Deferred (documented, not built)
 
-- Real BM25-at-scale via an OpenSearch/Elasticsearch lexical tier.
-- Hardening `rank_bm25` into a tenant-safe incremental index (only if a flag-on A/B shows real lexical wins).
-- Physical per-team Qdrant collections / sharding (premature; payload filtering + indexes suffice).
-- Neo4j graph-guided retrieval as a future Stage-0 routing signal.
-- Locking `sql_query` to channel scope.
+Tracked centrally in [`Docs/TODO.md`](../TODO.md) under "Backend — Not Yet Built (Future Candidates) → Retrieval scaling".

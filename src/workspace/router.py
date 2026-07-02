@@ -47,7 +47,7 @@ async def get_history(
         logger.warning("workspace_history_redis_failed", extra={"error": str(exc)})
         return {"items": [], "total": 0}
 
-    is_admin = user.get("role") in ("admin", "org_admin")
+    is_admin = user.get("role") == "admin"
     user_team_id = user.get("team_id")
 
     visible: list[dict] = []

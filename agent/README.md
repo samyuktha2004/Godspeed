@@ -8,15 +8,18 @@ LangGraph-based multi-agent RAG system with Gemini, Qdrant, BGE-M3, and streamin
 POST /agent/query
        │
        ▼
+  router_node   (deterministic, no LLM — loads team manifest, applies routing rules)
+       │  RoutingDecision{scope, suggested_agents, confidence}
+       ▼
   planner_node  (Gemini 2.5 Pro)
        │  ExecutionPlan
        ▼
- ┌─────┴──────────┬──────────────┐
- │                │              │    (parallel)
-doc_search    ticket_lookup  sql_query
- │    └──────────┘──────────────┘
- │  live_docs   (conditional)
- └──────────────┘
+ ┌─────┴──────┬──────────────┬───────────────┬───────────┐
+ │            │              │               │           │   (parallel)
+doc_search  ticket_lookup  sql_query  confluence_search  slack_search
+ │            │              │               │           │
+ │  live_docs (conditional, runs after doc_search)        │
+ └─────────────────────────┬───────────────────────────────┘
        │
     join_node   (fan-in)
        │
@@ -27,15 +30,17 @@ doc_search    ticket_lookup  sql_query
     done / escalate
 ```
 
-### Two-level orchestration
+### Three-level orchestration
 
-1. **Planner** (Level 1): Gemini analyses the query and returns a structured `ExecutionPlan` — which agents to run and which can be parallelised.
-2. **LangGraph** (Level 2): Executes the plan, running independent nodes concurrently via `asyncio`.
+1. **Router** (Level 0): a cheap deterministic node (no LLM call) narrows scope and suggests agents from a per-team knowledge manifest — see [`Docs/metadata-scaling-up/01_query_routing_layer.md`](../Docs/metadata-scaling-up/01_query_routing_layer.md). Scope is only applied at high confidence, so a correct answer can never become unreachable.
+2. **Planner** (Level 1): Gemini analyses the query plus the routing decision and returns a structured `ExecutionPlan` — which agents to run and which can be parallelised.
+3. **LangGraph** (Level 2): Executes the plan, running independent nodes concurrently via `asyncio`.
 
 ### Parallelism rules
 
 - `doc_search` and `ticket_lookup` always run in parallel when both are needed.
 - `sql_query` runs in parallel with other agents when the query is about structured/aggregated data.
+- `confluence_search` and `slack_search` run when the planner selects them (source-specific retrieval, same RBAC filter as `doc_search`). `slack_search` scans up to 10 bot-joined channels live via the Slack API keyword search — it is not backed by an ingested index, so results are best-effort and channel-capped.
 - `live_docs` runs after `doc_search` only if confidence is low OR the query names an external library.
 - Each agent node calls exactly one tool. No agent calls two tools.
 
@@ -47,6 +52,15 @@ After BGE reranker scoring:
 - `< 0.4` → `low`
 
 The synthesiser adjusts its tone and the guardrail applies stricter escalation at low confidence.
+
+### Failure modes the guardrail should catch
+
+| Failure Mode | Description |
+|---|---|
+| **Clause omission** | Drops a binding obligation/clause when compressing a multi-clause source |
+| **Scope bleed** | Merges content from two sources into a meaning neither supports alone |
+| **Condition dropping** | Multi-condition statements (`if X then Y`) lose a condition silently |
+| **Hedged hallucination** | Confidently answers from sources outside the query's authorised/retrieved scope |
 
 ## Setup
 
@@ -141,6 +155,7 @@ Events emitted in order:
 
 | Event | Payload |
 |---|---|
+| `routing_ready` | `{scope, suggested_agents, confidence, reasoning}` |
 | `plan_ready` | `{tasks, reasoning}` |
 | `agent_started` | `{agent}` — agent names: `doc_search`, `ticket_lookup`, `live_docs`, `sql_query` |
 | `agent_done` | `{agent, retrieval_confidence}` |

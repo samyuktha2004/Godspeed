@@ -16,7 +16,7 @@ List anomaly signals with optional filters. Non-admin users are automatically sc
 |---|---|---|---|
 | `type` | string | — | Filter by `signal_type` (`query_spike`, `query_drop`, `escalation_trend`, `staleness`, `dependency_risk`) |
 | `severity` | string | — | Filter by `severity` (`critical`, `high`, `medium`, `low`) |
-| `team_id` | string | — | Admin/org_admin only — query a specific team. Non-admins are always scoped to their own team. |
+| `team_id` | string | — | Admin only (`org_admin` is a deprecated/legacy role, see Authentication Notes below) — query a specific team. Non-admins are always scoped to their own team. |
 | `resolved` | boolean | `false` | Include resolved signals |
 | `limit` | integer | `50` | Max rows returned (1–200) |
 
@@ -84,7 +84,13 @@ Returns unresolved signal counts grouped by type and severity. Used by the front
 
 ## `PATCH /api/anomaly/signals/{signal_id}/resolve`
 
-Mark a signal as resolved. **Admin / org_admin only** — returns `403` for other roles.
+Mark a signal as resolved. **Corrected — role check is `admin` or `manager` (`require_role("admin", "manager")`), not "admin / org_admin"** as previously stated here.
+
+`org_admin` is a **deprecated, legacy role** — `supabase/owner_migration.sql` collapsed it into `role='admin'` + a new transferable `is_owner` boolean flag (`UPDATE users SET role='admin', is_owner=true WHERE role='org_admin'`, plus a cleanup of `channel_role_grants` rows referencing it). No code path creates `org_admin` users anymore. Since a workspace owner already has `role='admin'` post-migration, owners already pass every `role == "admin"` check in this router — there's no gap here to close.
+
+`src/workspace/router.py:50` and `src/file_agent/router.py:32,104` previously still checked `user.get("role") in ("admin", "org_admin")` — a dead branch, since `org_admin` can never appear in the data after the migration ran. Cleaned up to `role == "admin"` in both files.
+
+**Manager-specific scoping (previously undocumented):** a `manager` can only resolve signals belonging to their own team — `resolve_signal` checks `signal.get("team_id") != user.get("team_id")` and returns `403 "Cannot resolve signals outside your team"` if they don't match. `admin` has no such restriction.
 
 ### Path Parameter
 
@@ -98,7 +104,7 @@ Mark a signal as resolved. **Admin / org_admin only** — returns `403` for othe
 { "ok": true }
 ```
 
-Returns `404` if the signal does not exist or is already resolved.
+Returns `404` if the signal does not exist or is already resolved. Returns `403` if a `manager` targets a signal outside their team, or if the caller's role is neither `admin` nor `manager`.
 
 **Effect:** Sets `resolved = true`, `resolved_by = user.id`, `resolved_at = now()` on the row. The signal is excluded from all `resolved=false` queries going forward.
 
@@ -234,7 +240,8 @@ All 5xx errors are logged via `src/utils/logger.py` with request ID for tracing.
 
 The `/api/anomaly/signals` endpoint accepts an optional `team_id` query param:
 
-- **admin / org_admin roles:** `team_id` param is respected — they can query any team's signals
-- **All other roles:** `team_id` is overridden with `user.get("team_id")` from the session — the client cannot change this
+- **`admin` role (including workspace owners, who also hold `role='admin'` — see the resolve-endpoint note above):** `team_id` param is respected — can query any team's signals.
+- **All other roles (`manager`, `employee`, etc.):** `team_id` is overridden with `user.get("team_id")` from the session — the client cannot change this.
+- `org_admin` is not a live role (deprecated, migrated to `admin` + `is_owner` — see above) so it's correctly absent from this check.
 
 The `dependency_risk` signals have `team_id = null` (library risk is org-wide). They appear for all roles regardless of team scoping.

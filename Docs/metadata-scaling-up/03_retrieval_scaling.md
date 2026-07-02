@@ -33,7 +33,7 @@ qdrant_sparse_on_disk: bool = False # ingestion config (env: QDRANT_SPARSE_ON_DI
 
 - **Flag OFF (default):** `_load_bm25()` is never called; RRF fuses only `[dense, sparse]`; reranker unchanged.
 - **Flag ON:** BM25 contributes ranking, **but the leaky BM25-only reconstruction was removed.** Any id not present in the RBAC-filtered Qdrant candidate set is dropped — so BM25 can only *re-rank points the user is already allowed to see*. It can never introduce an unfiltered cross-tenant hit.
-  - *Tradeoff:* the flag-on path loses BM25-only recall. A fully faithful BM25 A/B would require indexing `team_id`/`channel_id` (a documented follow-up, not built).
+  - *Tradeoff:* the flag-on path loses BM25-only recall. A fully faithful BM25 A/B would require indexing `team_id`/`channel_id` — tracked in [`Docs/TODO.md`](../TODO.md) under "Retrieval scaling".
 
 ### Ingest side — `ingestion/jobs/ingest_job.py`
 

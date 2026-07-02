@@ -64,7 +64,8 @@ End-to-end runthrough across 4 personas (end-user, admin, analyst, new user) fou
 - `frontend/.env.example` — added descriptions for both required vars
 
 **Remaining known gaps (non-blocking):**
-- [ ] `WS /ws` notifications: currently only delivers messages pushed via `broadcast_notification()` — no event sources trigger it yet; wire into Celery task completions when needed
+- [x] ~~`WS /ws` notifications: no event sources trigger it yet~~ — **corrected, this is done.** `src/anomaly/notifier.py:broadcast_new_critical_signals()` pushes critical/high `anomaly_signals` rows via `broadcast_notification()`, triggered as a `BackgroundTask` from `GET /api/anomaly/signals` (rate-limited to once per 5 min). The Proactive Intelligence Agent gap from `03_analytics_and_intelligence.md` is effectively closed.
+- [ ] Remaining gap in the above: the push only fires when *someone* hits `GET /api/anomaly/signals` (e.g. a manager viewing `ManagerTeamView.tsx`, which does a one-time fetch on mount, not polling) — there's no independent scheduler, so if nobody views that page, no push happens even for a critical signal. Closing this needs either a Celery Beat task calling `broadcast_new_critical_signals()` directly (works even without a Celery process import quirk — check `src/anomaly/notifier.py`'s docstring on why it currently must run in the API process) or a short client-side poll interval on the anomaly signals query.
 - [ ] Analytics `/knowledge-health`, `/dependencies` require Neo4j nodes to have `version`, `latest_version`, `breaking_change` properties — populated by graph extraction pipeline
 - [ ] PDF export in `AnalyticsExport.tsx` returns a plain text fallback; a real PDF renderer (e.g. `weasyprint`) can be added post-MVP
 
@@ -274,6 +275,70 @@ Built: `QueryHistory.tsx` (expandable rows, success indicator, replay handler, p
 
 **Audit Trail:**
 - [ ] All mutations log to `rbac_audit_log` (action: `invite_user`, `bulk_user_import`, `change_role`, `grant_channel`, `revoke_channel`, etc.)
+
+---
+
+## Backend — Not Yet Built (Future Candidates)
+
+> Sourced from a docs sweep that checked every "not built"/"design only" claim in `Docs/` against the actual code. Items below are ones judged worth keeping on the roadmap; everything else that was speculative or had no real path to being needed was removed from the docs rather than tracked here.
+
+### Notion ingestion pipeline (medium effort)
+
+Notion currently only has live on-demand lookup (`tools/tools/notion_tools.py` via `POST /tools/chat`) — no ingestion into Qdrant, unlike Confluence/Jira/File. To bring it to parity:
+- [ ] `src/notion_agent/adapter.py` — page tree traversal via Notion API (can reuse `notion_search`/`notion_read_page` from `tools/tools/notion_tools.py` as the fetch layer)
+- [ ] `src/notion_agent/chunker.py` — block-to-markdown conversion, following the Confluence chunker's breadcrumb pattern
+- [ ] `src/notion_agent/pipeline.py` — chunk → GLiNER PII mask → BGE-M3 embed → Qdrant upsert
+- [ ] `src/notion_agent/router.py` — `POST /webhooks/notion` (Notion doesn't have native webhooks; likely needs polling instead — check current API support) + `POST /notion/sync/{workspace_id}`
+
+### GitHub ingestion pipeline (medium effort)
+
+Same gap as Notion, worse given GitHub is called out as a "Core" source throughout the original design docs and no ingestion agent, PyGithub dependency, or `/webhooks/github` endpoint exist — only live lookup (`tools/tools/github_tools.py` via `POST /tools/chat`). This is also the prerequisite for a real Dependency Tracker (needs CHANGELOG/release ingestion).
+- [ ] `src/github_agent/adapter.py` — README, `/docs`, CHANGELOG, merged PRs (body only), closed issues with relevant labels — reuse `tools/tools/github_tools.py`'s REST calls as the fetch layer
+- [ ] `src/github_agent/chunker.py`, `pipeline.py`, `router.py` — same pattern as `src/confluence_agent/`
+- [ ] `POST /webhooks/github` — verify `X-Hub-Signature-256`, handle `push`/`pull_request`/`release` events
+
+### Dependency Tracker (large effort)
+
+Referenced throughout the original design docs (`01`–`05`) as a core differentiator; never built. No `dependency_tracker` module exists.
+- [ ] Snapshot + diff: fetch CHANGELOG/release data for libraries the org depends on (GitHub agent already ingests CHANGELOGs — reuse that ingestion)
+- [ ] Classify changes (deprecated/removed/signature-changed) — start with an LLM-based changelog parser (Gemini Flash) rather than AST diffing; tree-sitter-based impact scanning is a stretch goal, not a v1 requirement
+- [ ] Surface breaking changes in the existing Dependencies analytics tab (`DependencyTracker.tsx` already renders version/breaking-change data from Neo4j nodes — this would populate it with real data instead of manually-tagged nodes)
+- Do **not** build the "auto-patch PR" feature from the original design — out of scope; a report is enough.
+
+### Raw text input endpoint (low effort)
+
+`POST /api/ingest/text` — accepts pasted text/markdown, same RBAC/pipeline as file upload. Trivial extension of the already-built `src/file_agent/` pattern; no adapter needed, just a new route + form handling.
+- [ ] Add route to `src/file_agent/router.py`: `POST /api/ingest/text` (title, content, access_level, source_reference) → normalize → existing file_agent pipeline
+
+### Complete `agent/tools/live_docs.py` (medium effort — currently a hard stub)
+
+`run_live_docs` unconditionally returns `[]` — it never calls Firecrawl or Tavily even when `FIRECRAWL_API_KEY`/`TAVILY_API_KEY` are set (see the `logger.warning("live_docs: stub returning empty results")` on the line after the key check). This is the T3 "Live Doc Agent" from the original design (see the original doc's fetch/chunk/embed approach, preserved here since the source doc was removed):
+- [ ] If `url` is detected in the query (or passed explicitly): call Firecrawl (`scrape_url`, `formats: ["markdown"], onlyMainContent: true`)
+- [ ] Else: call Tavily search (`search_depth="advanced", max_results=5, include_raw_content=True`) as the fallback
+- [ ] Chunk the fetched content with the existing semantic chunker, embed with BGE-M3, and return as `list[RetrievedChunk]` directly — no ephemeral store needed, since the tool is already called fresh per query and its output flows straight into the same join/synthesis step as `doc_search`
+- [ ] Wire `agent/graph.py`'s existing conditional trigger (low `doc_search` confidence OR query names an external library — already described in `agent/README.md`) to actually call the real implementation instead of the stub
+- Do not add: ephemeral session-scoped vector store, proactive pre-fetching on dependency-version-detection — those depend on features not built (Dependency Tracker); a stateless per-query fetch is enough for v1.
+
+### NL Analytics Interface for managers (medium effort)
+
+Managers currently get pre-built dashboard tabs (Queries/Health/Dependencies/Escalations — see `PRD.md`), not a free-text question box. `agent/tools/sql_query.py` already does NL→SQL→validated-SELECT→asyncpg execution for query-time retrieval, scoped to `documents`/`chunks`/`ingest_jobs`. The same pattern (LLM SQL generation + forbidden-keyword regex + table allowlist + parameterized execution) is directly reusable for a manager-facing analytics variant:
+- [ ] New `src/analytics/nl_query.py` (or similar) — same validation pattern as `agent/tools/sql_query.py`, but with its own `_ALLOWED_TABLES` scoped to `query_events`, `query_events_hourly`, `anomaly_signals` (see [`anomaly-and-forecasting/01_data_layer.md`](./anomaly-and-forecasting/01_data_layer.md)) — keep it a separate allowlist from the content tables, don't widen `sql_query.py` itself
+- [ ] New endpoint `POST /api/analytics/nl-query`, gated to manager/admin roles (reuse `require_role` pattern from `src/admin/`)
+- [ ] Frontend: a query box on `AnalyticsDashboard.tsx` (new tab or inline on Queries tab)
+- Not needed as part of this: the original design's "shown to head/admin for auditability" generated-SQL display is a nice-to-have, add only if requested.
+
+### Cross-Team Silo Detector — reconsidered, still not recommended
+
+Requires per-team topic-embedding clustering + pairwise cosine similarity across all team pairs — no existing infra basis (the anomaly-detection stack is intentionally stdlib-only, no clustering deps) and no demand signal yet. Left off the roadmap; revisit only if a customer/user explicitly asks for cross-team overlap detection.
+
+### Retrieval scaling (backend, deferred from `metadata-scaling-up` work)
+
+Consolidated from `Docs/metadata-scaling-up/04_config_and_operations.md`'s "Deferred" list — these are real, scoped engineering decisions, not speculative:
+- [ ] Real BM25-at-scale via an OpenSearch/Elasticsearch lexical tier (current `rank_bm25` is in-memory/O(N), opt-in and off by default)
+- [ ] If a flag-on BM25 A/B shows real lexical wins: harden `rank_bm25` into a tenant-safe incremental index, indexed by `team_id`/`channel_id`
+- [ ] Physical per-team Qdrant collections/sharding — premature today (payload filtering + indexes suffice), revisit only if query latency data says otherwise
+- [ ] Neo4j graph-guided retrieval as a future Stage-0 routing signal (alongside the existing deterministic router)
+- [ ] Lock `sql_query` to channel scope (currently team-scoped only)
 
 ---
 

@@ -34,8 +34,21 @@
 | **Document Parsing** | Docling | Handles multi-format docs (PDF, HTML, markdown); preserves tables and code blocks | PDF/HTML/markdown normalization |
 | **PII Detection** | GLiNER (local) | Zero egress; runs on-device; detects names, emails, IDs, addresses; GDPR/DPDP compliant | Pre-ingestion masking |
 | **Chunking** | Custom semantic chunker (src/ingestion/) | Respects paragraph/code block boundaries; 15% overlap; prevents mid-function splits | Semantic chunking |
-| **Embedding Model** | BGE-M3 (BAAI) | Multilingual dense + sparse in one pass; 8,192 token context; 384-dim output | Dense embeddings |
+| **Embedding Model** | BGE-M3 (BAAI) | Multilingual dense + sparse in one pass; 8,192 token context; 1024-dim output | Dense embeddings |
 | **Reranker** | BGE-reranker-v2-m3 | Reranks top 50 to top 5; multilingual; efficient | Re-ranking after fusion |
+
+**Why semantic chunking, not fixed-size:** fixed 512-token hard boundaries split code blocks mid-function, numbered lists mid-step, and table rows from headers. Semantic chunking splits on sentence/paragraph boundaries, never mid-code-block or mid-list, with 15% overlap to preserve context at chunk edges (target 256–512 tokens).
+
+**Why Docling for parsing:** handles PDF multi-column layouts that PyMuPDF/pdfplumber destroy, preserves table structure as markdown, and detects code blocks with language hints.
+
+**Why GLiNER over cloud NER:**
+
+| Criterion | GLiNER (local) | Cloud NER (AWS Comprehend / Google NLP) |
+|---|---|---|
+| Data egress | Zero | Data sent to cloud |
+| GDPR / India DPDP | Compliant | Requires additional DPA / transfer assessment |
+| Cost | One-time model load | Per-token pricing |
+| Latency | ~50ms/chunk on CPU | ~200ms + network |
 
 ### Vector Store & Semantic Search
 
@@ -71,10 +84,10 @@
 
 | Component | Technology | Rationale | Purpose |
 |---|---|---|---|
-| **Notion** | notion-sdk-py | Official SDK; handles pagination, auth refresh | Notion workspace sync |
+| **Notion** | notion-sdk-py | No ingestion agent; live on-demand lookup exists instead (`tools/tools/notion_tools.py` via `POST /tools/chat`). Full ingestion tracked in `Docs/TODO.md`. | Notion workspace sync (not built) |
 | **Confluence** | atlassian-python-api | Community-maintained; REST v2 support | Confluence space sync |
-| **GitHub** | PyGithub | Community standard; handles GraphQL fallback; rate limit management | GitHub repo + PR sync |
-| **Slack** | slack-sdk | Official SDK; event subscriptions, bolt framework for webhooks | Slack DM queries, alerts |
+| **GitHub** | `httpx` (direct REST calls, no PyGithub — not a dependency) | Live query-time search/read only via `tools/tools/github_tools.py` (`POST /tools/chat`) — no ingestion pipeline, no webhooks, despite being called out as a "Core" source in the original design docs. Tracked in `Docs/TODO.md`. | GitHub search (not sync) |
+| **Slack** | `httpx` (direct REST calls, no slack-sdk/Bolt) | Live query-time search only — no ingestion, no webhooks. `agent/tools/slack_search.py` (wired into the main query pipeline) and `tools/tools/slack_tools.py` (via `POST /tools/chat`) both call the Slack Web API directly. A `SlackWebhookHandler` class exists in `src/integrations/webhooks.py` but is dead code — not wired to any route. | Slack channel search |
 | **Jira** | atlassian-python-api | Same maintainer as Confluence; REST v3 | Jira issue sync |
 | **External Docs** | Firecrawl (primary) + BeautifulSoup4 (fallback) | Firecrawl handles JS-rendered SPAs; BS4 fallback for static sites | Live doc fetching |
 | **Web Search** | Tavily API | Specialized for RAG; better results than Google for documentation | Web search fallback |
@@ -199,9 +212,9 @@
 
 | Stage | Technology | Input | Output |
 |---|---|---|---|
-| **Encode Dense** | BGE-M3 (BAAI) | Text chunks (up to 8,192 tokens) | 384-dim dense vectors |
+| **Encode Dense** | BGE-M3 (BAAI) | Text chunks (up to 8,192 tokens) | 1024-dim dense vectors |
 | **Encode Sparse** | BGE-M3 built-in | Text chunks | Sparse BM25-like vectors |
-| **Index Dense** | Qdrant HNSW | 384-dim vectors | HNSW graph (fast ANN search) |
+| **Index Dense** | Qdrant HNSW | 1024-dim vectors | HNSW graph (fast ANN search) |
 | **Index Sparse** | Qdrant sparse index | Sparse vectors | Inverted index |
 | **Fuse Rankings** | RRF (Reciprocal Rank Fusion) | Top 50 dense + Top 50 sparse | Top 50 merged by score |
 | **Rerank** | BGE-reranker-v2-m3 | Top 50 fused results + query | Top 5 re-ranked |
@@ -291,7 +304,7 @@ docker-compose up -d  # Prod-grade docker-compose.yml with all services
 - [x] Ingestion: Docling + GLiNER + semantic chunking
 - [x] Retrieval: BGE-M3 + RRF + BGE-reranker-v2-m3
 - [x] NL-to-SQL: sql_query agent (Gemini Flash → validated SELECT → asyncpg)
-- [x] Validation: Generator + Critic (LangGraph)
+- [x] Validation: single guardrail agent (Gemini Flash, LangGraph) checks synthesised answer against sources
 - [x] Real-Time: SSE (query streaming) + WebSocket (graph visualization + notifications) + Redis pub/sub
 - [x] Knowledge Graph: Neo4j + Gemini 2.5 Pro extraction (graph_store/)
 - [x] Auth: JWT + httpOnly cookies
@@ -306,4 +319,4 @@ docker-compose up -d  # Prod-grade docker-compose.yml with all services
 - [ ] Advanced Auth: OAuth2 + SSO (OIDC)
 - [ ] Caching Strategy: Edge caching via CDN
 - [ ] Rate Limiting: Redis-based token bucket
-- [x] Webhook Signing: HMAC-SHA256 (Slack, GitHub, Jira) — already implemented in src/integrations/webhooks.py
+- [x] Webhook Signing: HMAC-SHA256 (Jira, Confluence — see their own `router.py` files). `src/integrations/webhooks.py` has a Slack/GitHub `WebhookHandler` implementation but it's dead code, not wired to any route — no `/webhooks/slack` or generic `/webhooks/github` handler is live (GitHub webhook status not independently verified here; Jira/Confluence are the confirmed-live ones).

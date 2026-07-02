@@ -279,7 +279,7 @@ All error messages visible to users are written in plain language. Technical det
 
 ---
 
-## 8. Phase 2 — Team Projects & Shared Wikis
+## 6. Phase 2 — Team Projects & Shared Wikis
 
 **Current state (MVP):** Query history (`gs:queries`) is a single global Redis list. All logged-in users see all queries. The graph snapshot is global — not filtered by team. `team_id` is passed to agent queries for retrieval context but is not used for access control or grouping anywhere in the system.
 
@@ -302,7 +302,7 @@ All error messages visible to users are written in plain language. Technical det
 
 ---
 
-## 6. Tech Stack Summary
+## 7. Tech Stack Summary
 
 | Layer | Technology |
 |---|---|
@@ -311,7 +311,7 @@ All error messages visible to users are written in plain language. Technical det
 | Vector search | Qdrant (local: host+port; hosted: QDRANT_URL + QDRANT_API_KEY) |
 | Graph store | Neo4j 5.x async driver |
 | Session / analytics store | Redis (aioredis) |
-| Embeddings | BAAI/bge-large-en via FlagEmbedding |
+| Embeddings | BAAI/bge-m3 via FlagEmbedding (dense + sparse, 1024-dim) |
 | Reranker | BAAI/bge-reranker via FlagEmbedding |
 | PII masking | GLiNER (local, zero egress) |
 | API server | FastAPI 0.115, uvicorn |
@@ -319,7 +319,7 @@ All error messages visible to users are written in plain language. Technical det
 
 ---
 
-## 7. Environment Variables Reference
+## 8. Environment Variables Reference
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|

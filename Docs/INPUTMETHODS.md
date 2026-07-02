@@ -12,11 +12,12 @@
 4. [Event-Driven Integrations](#4-event-driven-integrations)
 5. [Polling & Scheduled Sync](#5-polling--scheduled-sync)
 6. [Batch Upload & Manual Input](#6-batch-upload--manual-input)
-7. [Enterprise Data Sources](#7-enterprise-data-sources)
 8. [Multimodal & OCR](#8-multimodal--ocr)
 9. [Source Adapters (Reusable Pattern)](#9-source-adapters-reusable-pattern)
 10. [Knowledge Graph Extraction](#10-knowledge-graph-extraction)
 11. [Router & Ingestion Orchestration](#11-router--ingestion-orchestration)
+
+> Section numbers 7 (Enterprise Data Sources) and 8.2 (Multimodal Document Analysis) were removed — no code backs them and they're out of scope for the current product (see §5.1 for why).
 
 ---
 
@@ -27,8 +28,8 @@ All input sources feed into a unified pipeline through a **hybrid two-layer arch
 ```
 Layer 1: Source-Specific Adapters
 ┌──────────────┬─────────────┬──────────────┬─────────────────┐
-│ Notion API   │ Slack API   │ Database ORM │ Log Parsers     │
-│ Crawler      │ Event Bot   │ Connectors   │ & Scrapers      │
+│ Confluence/  │ File/PDF    │ Web scraper  │ Local log       │
+│ Jira agents  │ agent       │ (on-demand)  │ tailer (on-demand)│
 └──────┬───────┴──────┬──────┴──────┬───────┴────────┬────────┘
        │              │             │                │
        ▼              ▼             ▼                ▼
@@ -60,22 +61,21 @@ Data sources fall into four patterns, each with different sync strategies:
 
 | Pattern | Examples | Sync Method | Freshness | Use Case |
 |---------|----------|-------------|-----------|----------|
-| **API-based** | Notion, Confluence, Slack, Jira, Google Docs, Supabase | REST/GraphQL API + polling | 30-60 min | Knowledge bases, tickets, conversations |
-| **Event-driven** | GitHub webhooks, Slack events, Jira webhooks, real-time logs | Webhooks + event queue | Real-time | Changes, incidents, new data |
-| **Polling/scheduled** | Server logs, metrics, database snapshots, financial reports | Scheduled Celery task | 5-60 min | Monitoring, analytics, reporting |
+| **API-based (ingested)** | Confluence, Jira | REST API + webhook + periodic incremental sync | Real-time (webhook) + 60 min (periodic) | Knowledge bases, tickets |
+| **API-based (live lookup, not ingested)** | Notion, Slack, GitHub (extra) | On-demand REST API call per query via `POST /tools/chat`; Slack also has a query-time retrieval agent in the main pipeline | Real-time (always current, not persisted) | Ad-hoc search/read |
+| **Event-driven** | GitHub webhooks, Jira webhooks, Confluence webhooks | Webhooks + Celery `critical` queue | Real-time | Changes, new content |
+| **Polling (on-demand only)** | Server logs, web scraping (URL/sitemap) | Manually-triggered Celery task | On demand | Local log tailing, ad-hoc URL ingest |
 | **Batch/upload** | PDFs, CSV, raw text, scanned docs, bulk imports | Direct upload or scheduled file watch | On demand | One-time docs, manual data entry |
 
 ---
 
 ## 3. API-Based Integrations
 
-### 3.1 Notion (Existing — Extended)
+### 3.1 Notion (Live lookup implemented; ingestion pipeline not built)
 
-**Status:** Implemented. See `04_integrations_and_tech_stack.md` for core details.
+**Status:** No ingestion pipeline — Notion pages are never chunked into Qdrant, unlike Confluence/Jira/File. But a working **live on-demand lookup tool** exists: `tools/tools/notion_tools.py` (`notion_search`, `notion_read_page`), reachable via `POST /tools/chat` (see [`ARCHITECTURE.md`](./ARCHITECTURE.md)). It calls the Notion API directly per request — no local index, no RBAC scoping, no citations in the main `/agent/query` answer pipeline.
 
-**Extension ideas:**
-- Database properties as structured metadata (for entity extraction)
-- Synced databases across Notion → preserve back-references
+**Gap:** promoting Notion to a real ingestion agent (chunking + GLiNER PII mask + BGE-M3 embed + Qdrant upsert, matching the Confluence/Jira/File pattern) is tracked in [`TODO.md`](./TODO.md).
 
 ---
 
@@ -97,40 +97,24 @@ Data sources fall into four patterns, each with different sync strategies:
 
 ---
 
-### 3.3 GitHub (Existing — Extended)
+### 3.3 GitHub (Live lookup implemented; ingestion pipeline not built)
 
-**Status:** Implemented. See `04_integrations_and_tech_stack.md` for core details.
+**Status:** There is no `src/github_agent/`, no PyGithub dependency, no repo/PR/README ingestion into Qdrant, and no `/webhooks/github` endpoint (the `SlackWebhookHandler`/GitHub webhook code in `src/integrations/webhooks.py` is dead — never imported by any router). What exists is the same live on-demand pattern as Notion: `tools/tools/github_tools.py` via `POST /tools/chat`, calling the GitHub REST API directly per request.
 
-**Extension ideas:**
-- Commit message bodies (often contain architectural rationale)
-- Discussion threads (GitHub Discussions API)
-- Release notes with semantic versioning (Dependency Tracker input)
-- On-demand search across issues, PRs, and discussions via the GitHub search API
+**Gap:** GitHub was called out as a "Core" source alongside Confluence/Jira in the original design docs but never got an ingestion agent. Tracked in [`TODO.md`](./TODO.md) "Backend — Not Yet Built" as a future candidate (same shape as the Notion ingestion item — README/CHANGELOG/PR ingestion would also unblock a real Dependency Tracker).
 
 ---
 
-### 3.4 Slack (NEW — High Priority)
+### 3.4 Slack (Live retrieval implemented; ingestion pipeline not built)
 
-**Status:** Design only. Real-time chat context for team decisions.
+**Status:** No ingestion pipeline — Slack messages are never indexed into Qdrant. But **live query-time retrieval is implemented and wired into the main pipeline**: `agent/tools/slack_search.py:run_slack_search` is a real `slack_search_node` in `agent/graph.py`, selected by the planner alongside `doc_search`/`ticket_lookup`/etc. per query. There is also a separate on-demand lookup tool (`tools/tools/slack_tools.py`) behind `POST /tools/chat`.
 
-**What to index:**
-- Public channels (not DMs — privacy)
-- Messages containing decisions, links, code snippets, context
-- Thread replies (threaded conversations are often richer than top-level)
-- Files shared in Slack (metadata only — actual PDFs/images via separate upload)
+**How the live pipeline agent works today:**
+- Uses `SLACK_BOT_TOKEN`; scans up to 10 channels the bot has joined (`conversations.list` filtered to `is_member`)
+- Keyword-matches the query against recent message history per channel (no semantic embedding, no persistence)
+- RBAC: scoped only to channels the bot is a member of — there is no additional team/channel-permission mapping beyond that
 
-**Authentication:** Requires a Slack Bot Token (or full OAuth flow) with `chat:read`, `channels:history`, and `files:read` scopes.
-
-The Slack adapter crawls all accessible public channels, paginates their message history, skips bot messages, fetches threaded replies, and combines thread content with the parent message before normalizing to `RawDocument`. Each message is keyed by `slack://msg/{channel_id}/{ts}`.
-
-**RBAC & Privacy:**
-- Index only channels the bot has access to (configured per workspace)
-- Do NOT index DMs, private channels (without explicit opt-in)
-- Slack user IDs → internal RBAC mapping
-
-**Sync schedule:**
-- Incremental: every 15 minutes (Slack conversations move fast)
-- Full re-crawl: weekly
+**Known limitation:** the 10-channel cap and lack of persistence mean recall degrades as the workspace grows. A real ingestion pipeline (index messages into Qdrant like Confluence/Jira) would fix this — tracked in [`TODO.md`](./TODO.md) as a "nice to have," not committed, since live search already covers the common case.
 
 ---
 
@@ -152,57 +136,19 @@ The Slack adapter crawls all accessible public channels, paginates their message
 
 ---
 
-### 3.6 Google Docs & OneDrive (NEW — Optional)
-
-**Status:** Design only. Shared documents as knowledge base.
-
-The `GoogleDocsAdapter` authenticates via a service account for org-wide access (using `google-auth` and `googleapiclient`), then lists all documents under a given Drive folder recursively, fetches each via the Docs API to preserve formatting, and converts the result to markdown before normalizing to `RawDocument`.
-
----
-
-### 3.7 Supabase Neo4j Integration (NEW — Optional)
-
-**Status:** Design only. For real-time entity relationships and graph traversal.
-
-**Use case:** When adding structured data (orders, users, products), automatically extract relationships and query the graph during retrieval.
-
-The `SupabaseAdapter` reads all tables from a Supabase Postgres database, converts each row to a `RawDocument`, extracts entity relationships from foreign keys as graph edges, and upserts them to Neo4j. Incremental sync polls for rows where `updated_at > last_sync_at`.
-
----
-
 ## 4. Event-Driven Integrations
 
 Data sources that push updates via webhooks or event streams.
 
-### 4.1 GitHub Webhooks (Existing)
+### 4.1 GitHub Webhooks (Not built)
 
-**Status:** Implemented. See `04_integrations_and_tech_stack.md`.
-
-Listens for: push, pull_request (merged), release.
+No `/webhooks/github` endpoint exists — corrected from an earlier "Implemented" claim in this doc. See §3.3.
 
 ---
 
-### 4.2 Slack Events (NEW)
+### 4.2 Slack Events (Not built — not needed given live search)
 
-**Status:** Design only. Real-time reaction to team decisions.
-
-**Authentication:**
-```
-Slack App manifest YAML:
-oauth_config:
-  scopes:
-    bot:
-      - chat:read
-      - channels:history
-      - messages.read
-events:
-  bot_events:
-    - message
-    - app_mention
-request_url: https://your-app.com/webhooks/slack
-```
-
-The `POST /webhooks/slack` endpoint verifies the Slack request signature, handles the initial URL verification challenge, and on a `message` event (non-bot) queues a `SlackMessageIndexTask` for immediate re-indexing.
+No `POST /webhooks/slack` endpoint exists. Since query-time Slack retrieval already works via live API search (§3.4), a webhook-driven ingestion pipeline isn't planned unless the live-search approach proves insufficient at scale.
 
 ---
 
@@ -228,55 +174,13 @@ The `POST /webhooks/slack` endpoint verifies the Slack request signature, handle
 
 ---
 
-### 4.4 Real-Time Logs via Webhook (NEW)
-
-**Status:** Design only. For critical error logs.
-
-**Pattern:** App sends log entries to `POST /webhooks/logs` as they occur. The endpoint expects a JSON payload with fields `timestamp`, `level` (`ERROR` | `WARN` | `INFO`), `service`, `message`, `trace_id`, and `metadata`. Only `ERROR` and `CRITICAL` entries are normalized to `RawDocument` and immediately passed to the ingestion pipeline; lower-severity events are discarded at ingest time.
-
----
-
 ## 5. Polling & Scheduled Sync
 
-Data sources with no real-time push capability. Celery Beat tasks pull data on a schedule.
+### 5.1 Server Logs (Implemented, on-demand only)
 
-### 5.1 Server Logs (NEW)
+`LogAggregatorAdapter` (`src/adapters/polling.py`) reads structured JSON log lines from a local file path (`settings.integrations.log_file_paths[service]`) — not ELK/Splunk, just local files — filters to `ERROR`/`WARN` entries, and converts each to a `RawDocument`. It's a real, working Celery task (`src/tasks/ingestion_tasks.py`), but **nothing schedules it automatically** — no Celery Beat entry exists for it. It only runs when triggered manually (`.delay(...)`).
 
-**Status:** Design only. Aggregate logs from application servers.
-
-**Sources:** syslog, application logs, Docker containers, Kubernetes pods.
-
-The `LogAggregatorAdapter` reads structured JSON log lines (or queries ELK/Splunk) for a given service since the last sync timestamp, filters to `ERROR` and `WARN` entries, and converts each to a `RawDocument` including the level, message, trace ID, stack trace, and context. A Celery Beat task polls all configured services every 5 minutes and updates the last-sync timestamp in the state store.
-
----
-
-### 5.2 Performance Metrics (NEW)
-
-**Status:** Design only. Time-series metrics: latency, error rates, throughput.
-
-**Sources:** Prometheus, Datadog, New Relic, CloudWatch.
-
-The `MetricsAdapter` queries a metrics API for anomalies since the last sync and indexes only entries with an anomaly score above 0.8. Each anomalous metric becomes a `RawDocument` containing the metric name, current value, baseline, anomaly score, tags, and any alert reason or recommendation. A Celery task polls all configured metric sources every 15 minutes.
-
----
-
-### 5.3 Error Traces & Stack Traces (NEW)
-
-**Status:** Design only. Structured error data from APM tools.
-
-**Sources:** Sentry, Datadog APM, New Relic, Rollbar.
-
-The `ErrorTraceAdapter` polls APM APIs for unresolved error groups with new occurrences since the last sync. It indexes error groups that are either newly seen or have more than 3 occurrences. Each group becomes a `RawDocument` with error type, exception message, occurrence count, stack trace, affected files, and first/last seen timestamps.
-
----
-
-### 5.4 Financial Reports & Business Data (NEW)
-
-**Status:** Design only. Structured business entities from ERP, CRM, inventory systems.
-
-**Sources:** SAP, NetSuite, Salesforce, accounting systems, inventory DBs.
-
-The `BusinessDataAdapter` uses an ORM connector to query rows updated since the last sync across four domains: `sales` (transactions), `inventory` (stock levels and low-stock alerts), `supply_chain` (orders and shipments), and `finance` (financial reports). Each record is converted to a `RawDocument` with domain-appropriate field mapping.
+`MetricsAdapter`, `ErrorTraceAdapter`, and `BusinessDataAdapter` in the same file are literal no-op stubs — each `fetch_incremental` always returns `[]` with a "placeholder implementation" log line. No Prometheus/Datadog/Sentry/Salesforce/NetSuite/SAP integration exists. Not needed at the current product stage (observability/APM and ERP/CRM integration are out of scope for an engineering-docs copilot) — removed from the roadmap rather than carried forward as a "design only" item.
 
 ---
 
@@ -318,11 +222,9 @@ detect_format(path)
 
 ---
 
-### 6.2 Raw Text Input (NEW)
+### 6.2 Raw Text Input (Not built — low-effort future item)
 
-**Status:** Design only. User pastes or uploads raw text/markdown.
-
-The `POST /api/ingest/text` endpoint accepts a form-encoded `title`, `content`, optional `access_level` (default `team`), and optional `source_reference` (e.g., "email from John"). It normalizes the payload to a `RawDocument` with `source_type="manual"`, applies the requested RBAC level, and queues it through the ingestion pipeline, returning a `task_id` and URI.
+No `POST /api/ingest/text` endpoint exists. Low-effort extension of the already-built `src/file_agent/` upload pattern (paste text instead of a file) — tracked in [`TODO.md`](./TODO.md) "Backend — Not Yet Built."
 
 ---
 
@@ -342,92 +244,21 @@ See **Section 8: Multimodal & OCR** below.
 
 ---
 
-## 7. Enterprise Data Sources
-
-Structured data from business systems via ORM.
-
-### 7.1 ORM Pattern for Database Connections
-
-All business systems connect through a `BaseORM` interface that provides `connect`, `query` (table + optional WHERE clause + limit), `get_schema` (column names, types, relationships), and `get_updated_since` (rows updated after a given timestamp). Concrete implementations exist for Postgres (SQLAlchemy), Salesforce (REST API), NetSuite (SuiteTalk API), SAP (OData API), and a generic REST API wrapper.
-
-The `BusinessDataAdapter` selects the appropriate ORM class at connect time based on `credentials['system_type']`, then uses it to fetch updated records per domain and convert them to `RawDocument` instances.
-
----
-
-### 7.2 Supported Business Domains
-
-| Domain | Source System | Key Data | Use Case |
-|--------|---------------|----------|----------|
-| **Sales** | Salesforce, NetSuite, custom CRM | Orders, transactions, customer interactions | "What was the deal with client X?" |
-| **Inventory** | ERP systems, warehouse management | Stock levels, SKUs, locations, low-stock alerts | "What's our stock of component Y?" |
-| **Finance** | Accounting systems, ERP | Reports, GL entries, budgets, expenses | "What's our Q2 revenue by region?" |
-| **Supply Chain** | Procurement, logistics, shipping | POs, invoices, shipments, customs docs, events | "Where's order #12345?" |
-| **HR** | HRIS, payroll systems | Org structure, policies, training records (if accessible) | "Who reports to manager X?" |
-| **Product** | Product management tools, feature DBs | Features, roadmap, release notes, customer feedback | "When does feature Z ship?" |
-
-**Configuration example (.env):**
-```bash
-# Salesforce
-SALESFORCE_INSTANCE_URL=https://mycompany.salesforce.com
-SALESFORCE_CLIENT_ID=...
-SALESFORCE_CLIENT_SECRET=...
-SALESFORCE_USERNAME=...
-SALESFORCE_PASSWORD=...
-
-# NetSuite
-NETSUITE_ACCOUNT_ID=...
-NETSUITE_CLIENT_ID=...
-NETSUITE_CLIENT_SECRET=...
-
-# Direct Postgres (internal inventory DB)
-INVENTORY_DB_URL=postgresql://user:pass@db-inventory.internal:5432/inventory
-
-# Generic REST APIs
-SUPPLY_CHAIN_API_URL=https://logistics-api.vendor.com
-SUPPLY_CHAIN_API_KEY=...
-
-BUSINESS_DATA_SYNC_INTERVAL_MINUTES=60  # How often to poll
-```
-
----
-
 ## 8. Multimodal & OCR
 
 Handling images, scanned documents, and visual content.
 
-### 8.1 Image OCR & Analysis (PARTIALLY IMPLEMENTED)
+### 8.1 Image OCR (scanned PDFs implemented; standalone images not needed)
 
-**Status:** OCR for scanned PDF pages is implemented in `src/file_agent/parsers/pdf.py`. Full image-file OCR (standalone JPG/PNG) and multimodal layout analysis remain design-only.
+OCR for scanned PDF pages is implemented in `src/file_agent/parsers/pdf.py`: when a PDF page has fewer than 50 chars of extracted text, the parser falls back to `pytesseract` via a `pymupdf` pixmap at 200 DPI — transparent within the normal file ingestion pipeline.
 
-**What's working:** When a PDF page has fewer than 50 chars of extracted text, the parser automatically falls back to `pytesseract` via a `pymupdf` pixmap at 200 DPI. This handles scanned PDFs transparently within the file ingestion pipeline.
-
-**Still design-only:** Standalone image uploads (`POST /api/ingest/image`), multimodal vision analysis, document layout understanding.
-
-The planned `OCRAdapter` would accept an image path (local or URL) and an optional context string, pass the image to a vision model (e.g., Gemini) to extract text and layout description with confidence scores, and return a `RawDocument`. A folder crawl variant would process all image files under a given directory. The `POST /api/ingest/image` endpoint would save the upload to a temp path, invoke the adapter, queue the result, and clean up the temp file.
+Standalone image upload (`POST /api/ingest/image`) and multimodal vision/layout analysis were part of the original design but aren't needed — PDF/DOCX ingestion already covers the vast majority of real documents, and standalone images are an edge case not worth the added surface area right now.
 
 ---
 
-### 8.2 Multimodal Document Analysis (NEW)
+## 9. Source Adapters (Generic Pattern — Built but Unused)
 
-**Status:** Design only. When documents contain images + text, analyze both.
-
-The `MultimodalDocumentAdapter` would use Docling to extract both text and embedded images from a file, pass each image to a vision model asking it to describe visualizations and extract table data, then combine the text and per-image analyses into a single `RawDocument` with sections for the main text, visual content descriptions, and extracted tables.
-
----
-
-## 9. Source Adapters (Reusable Pattern)
-
-All adapters inherit from `BaseSourceAdapter` and implement these methods. This ensures consistent behavior and easy extensibility.
-
-### 9.1 Adapter Registry
-
-The `ADAPTER_REGISTRY` dict in `src/adapters/__init__.py` maps source type strings (e.g., `'notion'`, `'slack'`, `'log'`, `'metric'`, `'business_data'`, `'image'`) to their adapter classes. A `get_adapter(source_type)` factory function instantiates the correct adapter or raises `ValueError` for unknown types.
-
----
-
-### 9.2 Unified Ingestion Orchestrator
-
-The `IngestionOrchestrator` in `src/ingestion/orchestrator.py` provides a single `ingest_from_source(source_type, space_id, credentials, mode)` entry point. It instantiates and connects the appropriate adapter, fetches documents (full or incremental based on `mode`), runs each through the ingestion pipeline, logs failures without aborting the batch, updates the last-sync timestamp, and returns an `IngestResult` with counts of processed and successful documents plus any errors.
+`src/adapters/base.py` defines `BaseSourceAdapter`, an `AdapterRegistry` class, and `register_adapter()`/`get_adapter_registry()`. `src/ingestion/orchestrator.py`'s `IngestionOrchestrator.ingest_from_source(...)` is built on top of it. **Nothing in the codebase ever calls `register_adapter()`** — the registry is always empty at runtime, and none of the real ingestion agents (Confluence/Jira/File) go through this orchestrator; each has its own direct `pipeline.py`. Treat this as dead scaffolding, not the actual ingestion architecture — see [`ARCHITECTURE.md`](./ARCHITECTURE.md) for how ingestion really works (per-source agent, not shared adapter registry).
 
 ---
 
@@ -511,80 +342,20 @@ For the results page, the frontend calls `GET /graph/traverse?entity=<name>&type
 
 ---
 
-## 11. Router & Ingestion Orchestration
+## 11. Router & Ingestion Enrichment (superseded by real implementations)
 
-How documents are routed to specialized agents and enriched with knowledge graph context.
+`src/retrieval/router.py` (query-time `DocumentRouter`) and `src/ingestion/enrichment.py` (`DocumentEnricher`) described in earlier drafts of this doc **do not exist** — this was speculative design later replaced by real, different implementations:
 
-### 11.1 Query-Time Router
-
-The `DocumentRouter` in `src/retrieval/router.py` classifies each incoming user query by intent (lookup, troubleshooting, business_analytics, cross_team) using an LLM prompt, detects source hints from keywords in the query (e.g., "jira", "error", "order"), and returns a `RoutingDecision` specifying which search layers to query, which source types to prioritize, and whether to inject knowledge graph context. Troubleshooting and business analytics queries always enable graph injection.
-
-### 11.2 Ingest-Time Enrichment
-
-The `DocumentEnricher` in `src/ingestion/enrichment.py` runs after normalization and before storage. For each `RawDocument` it: extracts entities and relationships (via `EntityExtractor` and `RelationshipExtractor`), materializes them to the Neo4j graph via `GraphMaterializer`, classifies the document into a category (runbook, architecture, incident_report, feature_spec, business_process) using an LLM prompt, and detects cross-references to Jira issues, GitHub repos, and known service names.
+- **Query-time routing:** the real router is `agent/agents/router.py` — deterministic, no LLM call, narrows scope from a per-team manifest. See [`metadata-scaling-up/01_query_routing_layer.md`](./metadata-scaling-up/01_query_routing_layer.md).
+- **Ingest-time entity extraction:** happens per-agent (Confluence/Jira/File pipelines each return entity graph nodes) and is materialized by `graph_store/writer.py` using Gemini extraction (`graph_store/extractor.py`) — see §10 above. There's no separate document-category classifier.
 
 ---
 
-## 12. Webhook Event Flow & Agent Routing
+## 12. Webhook Event Flow (generic pluggable pattern — not built, not needed)
 
-### Webhook Handler Pattern (Core 80%)
+Earlier drafts of this doc described a generic pluggable webhook framework — `AuthHandler`/`PayloadParser`/`FieldTransformer`/`RBACEngine` classes, a `process_webhook_event` Celery task that dispatches by source name, and a `config/webhooks.yaml` + database-override system for per-org customization. **None of this exists.** `process_webhook_event` is defined in `src/tasks/ingestion_tasks.py`/`src/celery_app.py` but nothing calls it, and no `AuthHandler`/`PayloadParser`/`FieldTransformer`/`RBACEngine` classes exist anywhere.
 
-All webhook endpoints follow the same seven-step pattern: verify the request signature via an auth handler, parse the payload to extract event data, classify urgency (critical for real-time processing, normal/low for batched), transform fields to a normalized form, apply RBAC tags, check for duplicates via content hash, then either process immediately (critical) or add to the webhook queue.
-
-### Extension Points (20% Customization)
-
-Each source can override four pluggable handlers for custom behavior — `AuthHandler` (verify signatures), `PayloadParser` (extract event data from non-standard payloads), `FieldTransformer` (map org-specific fields to `RawDocument`), and `RBACEngine` (apply org-specific team routing rules). These are configured per-org via YAML and database overrides without forking the core code.
-
-### Webhook → Agent Routing
-
-After queuing, a Celery task (`process_webhook_event`) looks up the appropriate source agent by name, constructs a `RawDocument` from the normalized event data and RBAC tags, invokes the agent with an `ingest_and_index` instruction, and retries with exponential backoff (up to 3 times, 60s apart) on failure.
-
-### Configuration (YAML + Database)
-
-```yaml
-# config/webhooks.yaml
-# Defines auth handlers, parsers, transformers, RBAC rules per source
-
-webhooks:
-  slack:
-    auth_handler: slack_sig_verification  # Built-in or custom
-    payload_parser: slack_events_api       # Built-in or custom
-    field_transformer: slack_to_rawdoc     # Built-in or custom
-    rbac_engine: slack_channel_rbac        # Built-in or custom
-    priority:
-      "message": "normal"
-      "app_mention": "high"
-      "reaction_added": "low"
-    ttl_seconds: 2592000  # 30 days
-    enabled: true
-  
-  github:
-    auth_handler: github_hmac_sha256
-    payload_parser: github_webhooks_api
-    field_transformer: github_to_rawdoc
-    rbac_engine: github_repo_team_rbac
-    priority:
-      "push": "high"
-      "pull_request": "high"
-      "release": "critical"
-      "issues": "normal"
-    ttl_seconds: null  # Keep indefinitely
-    enabled: true
-  
-  jira:
-    auth_handler: custom_jira_oauth  # Org-specific: uses their Jira instance
-    payload_parser: jira_webhooks_api
-    field_transformer: jira_custom_fields  # Org-specific: custom field mapping
-    rbac_engine: jira_project_rbac
-    priority:
-      "issue_created": "high"
-      "issue_updated": "normal"
-    enabled: true
-
-# Database overrides per org (allows customization without forking)
-# Stored in PostgreSQL: webhooks_config table
-# Example: "slack.field_transformer" → points to custom handler in their deployment
-```
+What's real instead: each webhook (Jira, Confluence) is a plain FastAPI route in that source's own `router.py` that verifies its own HMAC signature and dispatches its own Celery task directly — see §4.3/4.3a above and [`ARCHITECTURE.md`](./ARCHITECTURE.md). This is simpler and sufficient at the current single-tenant scale; the generic pluggable-config layer isn't needed unless/until true multi-tenant per-org customization becomes a requirement.
 
 ---
 
@@ -592,12 +363,10 @@ webhooks:
 
 | Phase | Sources | Key Features | Status |
 |-------|---------|--------------|--------|
-| **Phase 1** | Notion, Confluence, GitHub, Jira, PDF, URL | Base adapter pattern, RawDocument model, generic ingestion pipeline | ✅ Done |
-| **Phase 1b (NEW)** | Jira (full), Confluence (full), Files (PDF/DOCX/CSV/XML/HTML/TXT) | Real-time webhooks, heading-split chunking, breadcrumb context, OCR fallback, file watcher | ✅ Done — `src/jira_agent/`, `src/confluence_agent/`, `src/file_agent/` |
-| **Phase 2 (Next)** | Slack, logs, error traces, metrics | Event-driven ingestion, real-time alerting, RBAC for chat | 🔄 Design ready |
-| **Phase 3** | Business data (sales, inventory, finance, supply chain) | ORM connectors, bulk sync, entity extraction for graph | 🔄 Extensible |
-| **Phase 4** | Multimodal (OCR, images, scanned docs) | Vision model integration, document layout analysis | 🔄 PDF OCR partial |
-| **Phase 5** | Knowledge graph materialization | Neo4j full implementation, graph-aware retrieval, cross-domain reasoning | ✅ Done — `graph_store/` (extractor.py uses Gemini 2.5 Pro; writer.py, reader.py, stream.py) |
+| **Phase 1** | Confluence, Jira, PDF/DOCX/CSV/XML/HTML/TXT | Full ingestion: webhooks, chunking, RBAC, Qdrant | ✅ Done — `src/jira_agent/`, `src/confluence_agent/`, `src/file_agent/` |
+| **Phase 1 (live-lookup only)** | Notion, Slack, GitHub | On-demand API search/read, no ingestion | ✅ Done — `tools/` (`POST /tools/chat`); Slack also has a query-time retrieval agent in the main pipeline (`agent/tools/slack_search.py`) |
+| **Phase 2** | Notion, GitHub ingestion pipelines | Bring both to full-ingestion parity with Confluence/Jira | See [`TODO.md`](./TODO.md) |
+| **Phase 3** | Knowledge graph materialization | Neo4j, graph-aware retrieval, cross-domain reasoning | ✅ Done — `graph_store/` |
 
 ---
 
@@ -638,7 +407,7 @@ Ingestion Pipeline
 
 Celery is configured with four priority queues — `critical` (10), `high` (7), `default` (5), `polling` (3), and `low` (1) — and task routes that send webhook tasks to `critical`, enrichment tasks to `high`, and polling tasks to `polling`.
 
-The Beat scheduler runs periodic sync tasks: Slack incremental sync every 15 minutes (900s), GitHub incremental sync every hour (3600s), log polling every 5 minutes (300s), and metrics anomaly polling every 15 minutes (900s).
+**Correction:** there is no Celery Beat schedule for Slack sync, log polling, or metrics polling — no `beat_schedule` entries exist for any of `src/tasks/ingestion_tasks.py`'s tasks. The only real periodic jobs are `confluence_periodic_sync` (60 min) and the nightly CAG job — see [`anomaly-and-forecasting/04_jobs_and_scheduling.md`](./anomaly-and-forecasting/04_jobs_and_scheduling.md) and `src/confluence_agent/tasks.py`. Web scraping, log aggregation, and Jira/File sync tasks are real and callable but must be triggered manually or via an API call, not on a timer.
 
 #### C. Web Scraping (`src/adapters/web_scraper.py`)
 
@@ -646,7 +415,7 @@ The Beat scheduler runs periodic sync tasks: Slack incremental sync every 15 min
 
 #### D. Polling Adapters (`src/adapters/polling.py`)
 
-`LogAggregatorAdapter.fetch_incremental(service, last_sync)` reads from a log file and returns `RawDocument` instances for `ERROR`/`WARN` entries, including level, trace ID, and stack trace. `MetricsAdapter`, `ErrorTraceAdapter`, and `BusinessDataAdapter` are placeholders for integration with Prometheus/Datadog, Sentry/Datadog APM, and Salesforce/NetSuite/ERP systems respectively.
+`LogAggregatorAdapter.fetch_incremental(service, last_sync)` reads from a local log file and returns `RawDocument` instances for `ERROR`/`WARN` entries, including level, trace ID, and stack trace — callable on-demand, not scheduled. `MetricsAdapter`, `ErrorTraceAdapter`, and `BusinessDataAdapter` are no-op stubs (always return `[]`) and are not part of the current roadmap.
 
 #### E. Webhook Handlers (`src/integrations/webhooks.py`)
 
@@ -710,19 +479,15 @@ celery -A ingestion.jobs.celery_app flower --port=5555
 
 ### 13.5 Complete Example Flow
 
-**Ingest Slack messages:**
+**Ingest a Confluence page (real, webhook-driven — the accurate example):**
 
-1. **Setup webhook** in Slack dashboard → points to `POST /webhooks/slack`
+1. Confluence page updated → Atlassian sends `POST /webhooks/confluence` (HMAC verified)
+2. Handler extracts `page.id` + `space.key` → dispatches `confluence_process_page.delay(...)` on Celery `critical` queue
+3. Celery worker processes → passes to `src/confluence_agent/pipeline.py`
+4. Pipeline executes → chunk (heading-split + breadcrumbs) → GLiNER PII mask → BGE-M3 embed → Qdrant upsert
+5. Result indexed → Qdrant + Supabase metadata
 
-2. **Receive event** → handler verifies signature → creates RawDocument
-
-3. **Queue for processing** → IngestQueue with priority=CRITICAL
-
-4. **Celery worker processes** → passes to ingestion pipeline
-
-5. **Pipeline executes** → parse → chunk → embed → store
-
-6. **Result indexed** → Postgres + Qdrant + Neo4j
+There is no equivalent webhook-driven flow for Slack today — see §3.4 for how Slack retrieval actually works (live query-time search, no ingestion).
 
 **Monitor:**
 - Flower UI shows task progress
@@ -773,14 +538,6 @@ print(f'Task ID: {task.id}')
 | Phase | Infrastructure | Status |
 |-------|-----------------|--------|
 | **Phase 1** | Config, adapters, orchestrator | ✅ Ready |
-| **Phase 2** | Celery tasks, webhooks, polling | ✅ Ready |
-| **Phase 3** | Business data adapters (placeholder) | 🔄 Extensible |
-| **Phase 4** | OCR integration, multimodal | 🔄 Extensible |
-| **Phase 5** | KG materialization tasks | ✅ Done — `graph_store/` (writer.py Celery-compatible, reader.py traversal, stream.py WebSocket) |
+| **Phase 2** | Celery tasks, webhooks (Jira/Confluence/File), on-demand polling (web scraper, local log tailing) | ✅ Ready — no automatic Beat schedule beyond `confluence_periodic_sync` and the nightly CAG job |
+| **Phase 3** | KG materialization tasks | ✅ Done — `graph_store/` (writer.py Celery-compatible, reader.py traversal, stream.py WebSocket) |
 
----
-
-*For detailed implementation guide, see: [WEBSCRAPING_CELERY_REDIS.md](../WEBSCRAPING_CELERY_REDIS.md)*
-
-*Previous: [04_integrations_and_tech_stack.md](./04_integrations_and_tech_stack.md)*
-*Reference: [01_problem_and_architecture.md](./01_problem_and_architecture.md) for Area 5 knowledge graph design*

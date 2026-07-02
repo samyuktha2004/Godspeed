@@ -1,6 +1,45 @@
 # 05 · Market Strategy, Competitor Analysis & Country GTM
 
-> **Document purpose:** Full competitive landscape, USP definitions, country-by-country market analysis, and go-to-market sequencing. Use this to make product, positioning, and expansion decisions.
+> **Document purpose:** Problem statement, objectives, design principles, Full competitive landscape, USP definitions, country-by-country market analysis, and go-to-market sequencing. Use this to make product, positioning, and expansion decisions.
+>
+> **Engineering accuracy note:** USPs 2 and 4 below describe capabilities that were built differently than pitched — see the correction inline. USP 1 (Live Doc Agent) and USP 3 (local PII) are accurate. Do not use USPs 2/4's original wording in customer-facing material until the gap is closed or the pitch is adjusted; see [`agent/README.md`](../agent/README.md) and [`metadata-scaling-up/03_retrieval_scaling.md`](./metadata-scaling-up/03_retrieval_scaling.md) for what's actually shipped.
+
+
+## The Core Problem
+
+In large IT companies and scaling startups, knowledge is scattered across Confluence, Jira, GitHub repositories, Notion workspaces, PDFs, wiki pages, and open-source documentation sites. No single employee knows where to look. New engineers spend weeks discovering what already exists. Senior engineers keep answering the same questions in support tickets, week after week.
+
+This is a systemic failure caused by three simultaneous gaps:
+
+- **Fragmented retrieval** — no unified interface across internal and external knowledge
+- **Stale and hallucinated answers** — RAG systems answer from old snapshots and cannot verify their own outputs
+- **Invisible intelligence** — no visibility into what teams search for, what fails, and what knowledge is missing
+
+## Objectives
+
+1. **Unify** enterprise knowledge sources into a single cited answer interface engineers trust.
+2. **Eliminate hallucinations** through answer validation before an answer reaches a user.
+3. **Surface real-time awareness** of external documentation and dependency changes.
+4. **Generate continuous intelligence** from every query interaction, improving retrieval quality and surfacing knowledge gaps.
+
+## Design Principles (still followed)
+
+1. **One agent, one tool** — never assign multiple tools to a single agent.
+2. **PII never leaves the network** — GLiNER runs locally at ingest time, always.
+3. **Every interaction is a data point** — query events are logged and feed analytics/anomaly detection.
+4. **Retrieval beats generation** — prefer grounded retrieved content over LLM synthesis for factual claims.
+5. **Soft routing over hard filtering** — narrowing scope must never make a correct answer unreachable (see the actual router implementation).
+
+## User Roles (scope, still accurate at a high level)
+
+| Role | Knowledge Scope | Analytics Access |
+|---|---|---|
+| **Employee** | Team KB + cross-team where permitted | Personal search history |
+| **Manager** | Full team scope + inter-team controls | Team health dashboard, escalation queue |
+| **Admin / Company Head** | Organisation-wide | Full org analytics, gap analysis |
+
+Detailed per-role UX flows: [`USERFLOW.md`](./USERFLOW.md) (shipped flows) — treat anything there beyond these three roles as aspirational unless cross-checked against [`TODO.md`](./TODO.md).
+
 
 ---
 
@@ -57,6 +96,8 @@ Pain signal:      Engineering manager spending 3+ hours/week answering repeat qu
 ---
 
 ## 2. Tool Strategy — Why Notion, Confluence & GitHub
+
+> **Engineering status check:** as of this writing, Confluence has a full ingestion agent; Notion and GitHub have live on-demand lookup only (no ingestion into Qdrant) — see [`TODO.md`](./TODO.md) for the plan to close that gap. Don't pitch Notion/GitHub as "fully indexed and searchable" until ingestion ships.
 
 ### Core Principle
 
@@ -226,9 +267,11 @@ T3 directly solves the deprecated API / production incident scenario. When a lib
 
 **Pitch:** "The answer to why your service broke is in a changelog from last month that nobody read. We read it for you."
 
-### USP 2 — Three-Way Hybrid RAG with BGE-M3
+### USP 2 — Hybrid RAG with BGE-M3 (dense + sparse)
 
-Most competitors use standard vector search. Some add BM25. No competitor runs BGE-M3's combined dense and sparse vectors in a single pass fused with BM25 via RRF. Three-way retrieval is demonstrably superior for technical vocabulary — error codes, API names, version strings — the daily vocabulary of engineering teams.
+> **As shipped:** the default retrieval path is BGE-M3 dense + sparse fused via RRF. A third BM25 leg exists but is opt-in/off by default (doesn't scale past dev-size corpora, see [`metadata-scaling-up/03_retrieval_scaling.md`](./metadata-scaling-up/03_retrieval_scaling.md)) — pitch as two-way hybrid, not three-way, until that changes.
+
+Most competitors use standard vector search alone. BGE-M3's combined dense and sparse vectors in a single pass, fused via RRF, is demonstrably better for technical vocabulary — error codes, API names, version strings — the daily vocabulary of engineering teams.
 
 **Pitch:** "Exact token matching + semantic understanding + instant relevance scoring. Not just 'find similar docs' — find the right doc, even when you typed the error code exactly."
 
@@ -238,13 +281,13 @@ Every SaaS competitor sends your enterprise data to external servers. GLiNER run
 
 **Pitch:** "Your onboarding documents contain employee names, salaries, and org structure. They never leave your servers."
 
-### USP 4 — Generator + Critic Adversarial Validation
+### USP 4 — Guardrail Validation Before Delivery
 
-Having a model validate its own output is a structural conflict. Our system separates generation and validation into two independent agents. An answer only reaches the user when both agree on grounding, citation completeness, and factual integrity.
+> **As shipped:** a single `guardrail_node` (Gemini 2.5 Flash) checks the synthesised answer against retrieved sources and flags/escalates low-grounding responses — not a separate two-agent Generator+Critic adversarial pair. Pitch below overstates the architecture; use "validated before delivery," not "two agents."
 
-Stanford 2025 research: even state-of-the-art RAG systems hallucinate 17-33% of the time in specialised domains. Adversarial validation is the strongest available architectural response.
+Having a model validate its own output unchecked is a structural risk. Every answer is checked against its cited sources before delivery, and low-confidence or ungrounded answers are flagged for escalation rather than shown silently.
 
-**Pitch:** "Two AI agents check every answer before you see it. One writes it. One tries to break it. You only get the ones that survive."
+**Pitch:** "Every answer is checked against its sources before you see it — low-confidence answers get flagged, not guessed."
 
 ### USP 5 — Closed Query Intelligence Feedback Loop
 
@@ -529,8 +572,3 @@ PHASE 4 — Europe Entry (Year 3+)
 3. **PDPA (Singapore)** — Breach notification to PDPC within 72 hours if breach affects 500+ individuals or causes significant harm. Implement breach detection alerting in the ingestion pipeline.
 
 4. **All markets** — Do not store raw PII anywhere in the system after ingest. GLiNER masks it at ingest time. The `pii_risk_events` table stores only entity_type and source — never the actual PII value.
-
----
-
-*Previous: [04_integrations_and_tech_stack.md](./04_integrations_and_tech_stack.md)*
-*Back to start: [01_problem_and_architecture.md](./01_problem_and_architecture.md)*

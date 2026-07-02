@@ -145,7 +145,7 @@ curl -sN -X POST http://localhost:8000/agent/query \
   | while IFS= read -r line; do echo "$line"; done
 ```
 
-Expected event sequence: `plan_ready` → `agent_started` (×N) → `agent_done` (×N) → `synthesis_started` → `answer_chunk` (×M) → `guardrail_result` → `done`
+Expected event sequence: `routing_ready` → `plan_ready` → `agent_started` (×N) → `agent_done` (×N) → `synthesis_started` → `answer_chunk` (×M) → `guardrail_result` → `done`
 
 ### Fetch knowledge graph nodes
 
@@ -188,14 +188,14 @@ Each webhook endpoint verifies an HMAC-SHA256 signature. Generate secrets with:
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-Set the generated value in `.env` (`JIRA_WEBHOOK_SECRET`, `CONFLUENCE_WEBHOOK_SECRET`, etc.), then register the corresponding URL in the Atlassian / GitHub / Slack admin:
+Set the generated value in `.env` (`JIRA_WEBHOOK_SECRET`, `CONFLUENCE_WEBHOOK_SECRET`), then register the corresponding URL in the Atlassian admin:
 
 | Source | Endpoint |
 |--------|----------|
 | Jira | `POST /webhooks/jira` |
 | Confluence | `POST /webhooks/confluence` |
-| GitHub | `POST /webhooks/github` |
-| Slack | `POST /webhooks/slack` |
+
+GitHub and Slack have no ingestion webhooks — both are live on-demand lookup only via `POST /tools/chat` (see [`Docs/ARCHITECTURE.md`](Docs/ARCHITECTURE.md)).
 
 ---
 
@@ -249,5 +249,5 @@ Full variable list: [`.env.example`](.env.example)
 - [Architecture](Docs/ARCHITECTURE.md)
 - [Tech Stack](Docs/TECHSTACK.md)
 - [Input Methods](Docs/INPUTMETHODS.md)
-- [User Flow](Docs/USERFLOW.md)
+- [User Flow](Docs/USERFLOW.md) ([original UX vision, not yet built](Docs/USERFLOW_VISION.md))
 - [Frontend TODO](Docs/TODO.md)

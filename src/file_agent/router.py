@@ -29,7 +29,7 @@ _MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 def _safe_team_id(user: dict, requested_team_id: str) -> str:
     """Pick the user's team unless they're an admin (admins can target any team)."""
-    if user.get("role") in ("admin", "org_admin"):
+    if user.get("role") == "admin":
         return requested_team_id or user.get("team_id") or file_config.team_id
     if requested_team_id and requested_team_id != user.get("team_id"):
         raise HTTPException(
@@ -101,7 +101,7 @@ async def ingest_folder(
     Restricted to admins because it reads from the server filesystem — any
     authenticated user pointing this at /etc would be a path-traversal vector.
     """
-    if user.get("role") not in ("admin", "org_admin"):
+    if user.get("role") != "admin":
         raise HTTPException(
             status_code=403,
             detail="Folder ingestion requires an admin role",

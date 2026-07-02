@@ -100,7 +100,7 @@ This design ensures **scalability by source**, **operational clarity**, and **pr
 
 ### Directory Structure
 
-> **Note:** The actual repo layout diverges from early plans. The implemented structure is below. `src/query_engine/` and `src/retrieval/` referenced in earlier design docs do not exist — that logic lives in `agent/`. Graph endpoints live in `graph_store/`, not `src/api/graph.py`.
+> **Note:** The actual repo layout diverges from early plans. The implemented structure is below. `src/query_engine/` and `src/retrieval/` referenced in earlier design docs do not exist — that logic lives entirely in `agent/` (routing, planning, retrieval, synthesis, guardrail). Graph endpoints live in `graph_store/`, not `src/api/graph.py`.
 
 ```
 agent/                          # LangGraph multi-agent query engine (IMPLEMENTED)
@@ -117,9 +117,13 @@ agent/                          # LangGraph multi-agent query engine (IMPLEMENTE
 └── tools/
     ├── doc_search.py           # Qdrant hybrid dense+sparse search
     ├── ticket_lookup.py        # Jira-specific retrieval
+    ├── confluence_search.py    # Confluence-specific retrieval (same RBAC filter as doc_search)
+    ├── slack_search.py         # Live Slack channel keyword search via Bot API (not ingested — scans up to 10 joined channels per query)
     ├── live_docs.py            # Firecrawl real-time doc fetching
     ├── sql_query.py            # NL-to-SQL: translates query → validated SELECT → asyncpg execution
     └── summariser.py           # Context compression before synthesis
+
+> `agent/` also includes `agents/router.py` — a deterministic node that runs before the planner (see [`Docs/metadata-scaling-up/01_query_routing_layer.md`](metadata-scaling-up/01_query_routing_layer.md)). Full pipeline: `router → planner → [doc_search|ticket_lookup|live_docs|sql_query] → join → synthesiser → guardrail`.
 
 graph_store/                    # Neo4j knowledge graph (IMPLEMENTED)
 ├── api.py                      # GET /graph/nodes, POST /graph/ingest, GET /graph/traverse
@@ -186,23 +190,6 @@ src/
 │   ├── models.py               # Pydantic models (RawDocument, ChunkedDocument, Entity, Graph)
 │   └── config.py               # Shared config (QDRANT_URL, REDIS_URL, etc.)
 │
-├── retrieval/                  # T1, T2, T3 retrieval layers (shared across queries)
-│   ├── __init__.py
-│   ├── hybrid_search.py        # T1: Dense + Sparse (RRF fusion) — queries Qdrant
-│   ├── reranker.py             # BGE-reranker-v2-m3 integration
-│   ├── context_compressor.py   # Compress top-5 into LLM context
-│   ├── cag_agent.py            # T2: Cache-Augmented Generation (recent syncs)
-│   ├── live_doc_agent.py       # T3: Real-time doc fetching (Firecrawl)
-│   └── models.py               # Pydantic models for retrieval
-│
-├── query_engine/               # Query execution (LangGraph-based)
-│   ├── __init__.py
-│   ├── generator_agent.py      # Generator LLM agent (creates answer from context)
-│   ├── critic_agent.py         # Critic LLM agent (validates against sources)
-│   ├── orchestrator.py         # LangGraph: routes query through retrieval → generation → validation
-│   ├── streaming.py            # Stream answer chunks + citations + graph to frontend
-│   └── models.py               # Pydantic models for query responses
-│
 ├── redis/                      # Redis utilities (shared)
 │   ├── __init__.py
 │   ├── cache.py                # Caching layer (with TTL)
@@ -247,7 +234,17 @@ src/
     ├── query_engine/           # Query generation + validation tests
     ├── fixtures/               # Pytest fixtures (mock data)
     └── integration/            # End-to-end scenarios
+
+tools/                          # Standalone live-lookup chat agent (IMPLEMENTED, separate from agent/)
+├── router.py                   # POST /tools/chat, DELETE /tools/chat, GET /tools/health
+│                                #   Gemini (primary) or OpenAI (fallback) tool-calling loop, in-memory session history
+└── tools/
+    ├── github_tools.py         # Live GitHub search/read via REST API
+    ├── slack_tools.py          # Live Slack search/read via Bot API
+    └── notion_tools.py         # Live Notion search/read via Notion API
 ```
+
+> **Note on Notion/Slack/GitHub:** None of these three have an *ingestion* pipeline (no chunking into Qdrant, unlike Confluence/Jira/File, and no webhooks despite being called "Core"/"Implemented" sources in earlier design docs) — but all three have working **live on-demand lookup** via `POST /tools/chat` (`tools/`, above), and Slack additionally has a query-time retrieval agent wired into the main pipeline (`agent/tools/slack_search.py` — see the `agent/` tree above). Do not describe any of the three as flatly "not built"; they're built via a different pattern (live API call, not pre-indexed). Bringing them to full ingestion parity is tracked in [`Docs/TODO.md`](TODO.md).
 
 ### Key Backend Design Decisions
 
@@ -507,6 +504,7 @@ POST /confluence/sync/{space_key}
 POST /agent/query
 ├─ Request: { query: string, team_id: string, session_id: string }
 ├─ Response: Content-Type: text/event-stream
+│  ├─ event: routing_ready     → { scope, suggested_agents, confidence, reasoning }
 │  ├─ event: plan_ready        → { tasks: [AgentTask], reasoning: string }
 │  ├─ event: agent_started     → { agent: "doc_search"|"ticket_lookup"|"live_docs"|"sql_query"|"summariser" }
 │  ├─ event: agent_done        → { agent: string, chunks: [RetrievedChunk], confidence: "high"|"medium"|"low" }
@@ -628,23 +626,7 @@ GET /api/admin/api-keys
 
 ### Bash Development Testing
 
-Use these instead of Swagger UI when you need to test streaming behaviour from the terminal.
-
-**Test SSE query stream (replaces Swagger — Swagger can't stream SSE):**
-```bash
-#!/usr/bin/env bash
-# test_query.sh — streams the SSE response token-by-token to stdout
-
-BASE_URL="${GODSPEED_API:-http://localhost:8000}"
-
-curl -N -s \
-  -X POST "${BASE_URL}/agent/query" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"What is the auth service?","team_id":"team-1","session_id":"test-001"}' \
-| while IFS= read -r line; do
-    echo "$line"
-  done
-```
+For the general quickstart (env setup, install, run) and the SSE query-stream curl example, see the root [`README.md`](../README.md#5-verify-the-stack). Below are additional checks specific to graph and webhook endpoints not covered there.
 
 **Test graph REST endpoints:**
 ```bash
@@ -703,6 +685,7 @@ There are two distinct real-time channels — do not conflate them:
 POST /agent/query   →   Content-Type: text/event-stream
 
 Emits events in order:
+  event: routing_ready     data: { scope: {...}|null, suggested_agents: [...], confidence: "high"|"medium"|"low", reasoning: "..." }
   event: plan_ready        data: { tasks: [...], reasoning: "..." }
   event: agent_started     data: { agent: "doc_search" }
   event: agent_done        data: { agent: "doc_search", chunks: [...], confidence: "high" }
@@ -750,7 +733,8 @@ Will emit:
    └─ frontend simultaneously opens WS /graph/stream for parallel graph rendering
 
 2. Backend receives query via SSE stream
-   ├─ LangGraph planner breaks query into AgentTask list → emits plan_ready
+   ├─ Deterministic router narrows scope/suggests agents from the team's knowledge manifest → emits routing_ready
+   ├─ LangGraph planner breaks query into AgentTask list (informed by routing) → emits plan_ready
    ├─ Each agent runs (doc_search / ticket_lookup / live_docs) → emits agent_started + agent_done
    ├─ doc_search: BGE-M3 embed → Qdrant hybrid search (dense+sparse RRF) → top 50 → BGE reranker → top 5
    ├─ Synthesiser streams answer tokens → emits answer_chunk per token
@@ -787,7 +771,7 @@ Will emit:
 
 ```
 1. Ingestion task triggered
-   ├─ Webhook from source (e.g., Notion) OR Celery periodic task
+   ├─ Webhook from source (Jira or Confluence — the only two with ingestion webhooks) OR Celery periodic task
 
 2. Fetch stage
    ├─ Adapter queries source API
@@ -977,4 +961,19 @@ Monitoring via Prometheus + Grafana (optional)
 6. **Local PII:** GLiNER runs on-premises; zero data egress for compliance.
 7. **Cacheable at Every Layer:** Embeddings cached, searches cached, answers cached (with refresh policy).
 8. **Observable:** Structured logging, metrics, traces (OpenTelemetry phase 2).
+
+---
+
+## Design Decisions Not Taken
+
+Deliberate departures from the original design docs, kept here so the reasoning isn't re-litigated later. (Migrated from `02_rag_pipeline_and_validation.md`/`03_analytics_and_intelligence.md` before their removal.)
+
+| Original design | What shipped instead | Why |
+|---|---|---|
+| BM25 always-on as a third retrieval leg | Dense + sparse (BGE-M3) by default; BM25 opt-in, off by default | Always-on BM25 required a full corpus reindex per ingest and had a tenant-leak risk (see [`metadata-scaling-up/03_retrieval_scaling.md`](metadata-scaling-up/03_retrieval_scaling.md)). No measured retrieval-quality loss from defaulting it off. |
+| Generator + Critic as two separate adversarial LLM agents | Single `guardrail_node` that checks the synthesiser's answer against sources | Two agents roughly double LLM cost/latency per query for a benefit not currently evidenced as missing. Revisit only if guardrail false-negatives become a measured problem. |
+| T2 CAG: nightly summariser injecting "last 24h team activity" into the system prompt | Nightly job generates per-space/repo routing-manifest gists instead (different purpose) | The original recency-bridge goal (content shipped but not yet indexed) is largely moot for Confluence/Jira, which ingest via near-real-time webhooks. It still applies to GitHub, closed once GitHub ingestion ships (tracked in [`TODO.md`](TODO.md)). |
+| Area 4 anomaly detection on InfluxDB + external ML libs | Plain PostgreSQL/Supabase, stdlib-only algorithms (`statistics`, `math`) | No measurable benefit to an extra time-series datastore or ML dependency for four detectors that are well-served by Z-score/Poisson math on existing tables. |
+| Area 5 full provenance graph (audit trail for "which answers cited doc X") + team-ownership graph | 4-entity-type graph (Service/Library/Incident/Team) only, no provenance/ownership schema | Provenance graph's main use case (compliance-driven answer invalidation) isn't blocking anything — DPDPA right-to-erasure is already handled by `src/auth/router.py` without it. Ownership graph's only planned consumer (Cross-Team Silo Detector) was itself rejected (below). |
+| Cross-Team Silo Detector (semantic query-overlap across teams) | Not built | Needs per-team topic-embedding clustering with no existing infra basis — the anomaly stack is intentionally stdlib-only — and no demand signal yet. |
 
